@@ -34,6 +34,7 @@ class WeatherService:
 
     def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or OPENWEATHER_API_KEY
+        print(f"[WeatherService init] api_key present: {bool(self.api_key)}")
 
     def get_weather(
         self,
@@ -45,6 +46,7 @@ class WeatherService:
         session = get_session()
         try:
             cached = get_cached_weather(session, destination_id)
+            print(f"[get_weather] {destination_id} cache hit: {cached is not None}")
             if cached and self._is_fresh(cached.get("fetched_at"), WEATHER_CACHE_TTL):
                 return self._from_payload(cached["data"])
 
@@ -59,6 +61,7 @@ class WeatherService:
             session.close()
 
     def _fetch(self, lat: float, lon: float) -> dict[str, Any]:
+        print(f"[Weather _fetch] has key: {bool(self.api_key)}")
         if not self.api_key:
             return self._mock_weather(lat, lon)
 
@@ -118,6 +121,7 @@ class WeatherService:
     @staticmethod
     def _from_payload(data: dict[str, Any]) -> WeatherSnapshot:
         cur = data["current"]
+        print(f"[_from_payload] country={data.get('country')} temp_max={cur['main'].get('temp_max')} keys={list(cur['main'].keys())}")
         fc_list = data.get("forecast", {}).get("list", [])
         forecast_days = []
         seen_dates: set[str] = set()

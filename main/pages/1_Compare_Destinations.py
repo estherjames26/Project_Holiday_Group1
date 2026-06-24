@@ -43,7 +43,7 @@ if len(selected) < 2:
 
 compared = [d for d in results if d["id"] in selected]
 
-st.plotly_chart(build_radar_chart(compared, selected_ids=selected), use_container_width=True)
+st.plotly_chart(build_radar_chart(compared, selected_ids=selected), width="stretch")
 
 cols = st.columns(len(compared))
 for col, dest in zip(cols, compared):
@@ -69,4 +69,4 @@ for dest in compared:
         "7-night USD": dest["total_cost_usd"],
         "Venues": dest["nightlife_total"],
     })
-st.dataframe(pd.DataFrame(rows).set_index("Destination"), use_container_width=True)
+st.dataframe(pd.DataFrame(rows).set_index("Destination"), width="stretch")

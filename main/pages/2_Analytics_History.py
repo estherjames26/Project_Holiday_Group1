@@ -42,7 +42,7 @@ if history:
     st.dataframe(
         df[["id", "created_at", "origin_airport", "top_destination", "top_score", "result_count"]],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     if len(df) >= 2:
@@ -51,7 +51,7 @@ if history:
             df.sort_values("created_at"), x="created_at", y="top_score",
             markers=True, title="Top score over time",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     top_counts = df["top_destination"].value_counts()
     fig2 = px.bar(
@@ -59,7 +59,7 @@ if history:
         labels={"x": "Destination", "y": "Times ranked #1"},
         title="Who wins most often",
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 else:
     st.info("No searches logged yet — run one on the home page.")
 

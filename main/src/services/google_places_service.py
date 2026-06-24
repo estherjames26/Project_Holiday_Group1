@@ -87,18 +87,24 @@ class GooglePlacesService:
         if self._client:
             return self._fetch_via_sdk(lat, lon, radius_m)
         return self._fetch_via_rest(lat, lon, radius_m)
+    
 
     def _fetch_via_sdk(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
         location = (lat, lon)
-        result: dict[str, list[dict]] = {}
+        result = {}
         for key, place_type in self.PLACE_TYPES.items():
             resp = self._client.places_nearby(location=location, radius=radius_m, type=place_type)
-            result[key] = resp.get("results", [])[:10]
+            results = resp.get("results", [])[:10]
+            print(f"[Places SDK] {place_type} at {lat},{lon}: {len(results)} results, first={results[0]['name'] if results else 'none'}")
+            result[key] = results
         return result
 
     def _fetch_via_rest(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
-        if not self.api_key:
+        payload = resp.json()
+        print(f"[Places API] status={payload.get('status')} error={payload.get('error_message', '')}")
+        if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
             return self._mock_places(lat, lon)
+        
 
         result: dict[str, list[dict]] = {}
         for key, place_type in self.PLACE_TYPES.items():

@@ -52,6 +52,7 @@ init_db()
 inject_styles()
 
 
+
 @st.cache_resource
 def get_engine() -> RecommendationEngine:
     return RecommendationEngine()
@@ -143,7 +144,7 @@ def render_forecast_chart(dest: dict) -> None:
     fig.add_trace(go.Scatter(x=df["date"], y=df["temp_max"], name="Max °C", mode="lines+markers"))
     fig.add_trace(go.Scatter(x=df["date"], y=df["temp_min"], name="Min °C", mode="lines+markers"))
     fig.update_layout(title=f"5-day forecast — {dest['name']}", height=320, margin=dict(t=40, b=20))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_destination_detail(dest: dict) -> None:
@@ -185,11 +186,11 @@ def render_destination_detail(dest: dict) -> None:
         st.dataframe(pd.DataFrame({
             "Item": ["Return flight", "Hotel per night", "Airbnb per night", "Meal cost index"],
             "USD": [c["flight_usd"], c["hotel_nightly_usd"], c["airbnb_nightly_usd"], c["meal_index"]],
-        }), hide_index=True, use_container_width=True)
+        }), hide_index=True, width="stretch")
         st.caption(f"Estimated 7-night total: ${c['total_7_night_usd']:,.2f} (source: {c['source']})")
 
     with tab4:
-        st.plotly_chart(build_amenity_breakdown_chart(dest), use_container_width=True)
+        st.plotly_chart(build_amenity_breakdown_chart(dest), width="stretch")
         for label, key in [("Bars", "bars"), ("Restaurants", "restaurants"), ("Nightclubs", "night_clubs")]:
             items = dest["amenities"][key]
             if items:
@@ -202,7 +203,7 @@ def main() -> None:
     render_status_pills(bool(OPENWEATHER_API_KEY), bool(GOOGLE_MAPS_API_KEY), bool(OPENAI_API_KEY), ORIGIN_AIRPORT)
     prefs, origin, top_n = render_sidebar()
 
-    if st.sidebar.button("Find destinations", type="primary", use_container_width=True):
+    if st.sidebar.button("Find destinations", type="primary", width="stretch"):
         with st.spinner("Fetching weather and venue data..."):
             engine = get_engine()
             results, summary, portfolio = engine.recommend(prefs, origin, top_n)
@@ -247,7 +248,7 @@ def main() -> None:
                 "Nightlife": d["nightlife_total"],
             }
             for i, d in enumerate(results)
-        ]), hide_index=True, use_container_width=True)
+        ]), hide_index=True, width="stretch")
 
     st.markdown('<p class="section-title">Map</p>', unsafe_allow_html=True)
     st_folium(build_destination_map(st.session_state.get("all_map", results)), width=None, height=400)
@@ -255,10 +256,10 @@ def main() -> None:
     with st.expander("Charts and comparisons", expanded=False):
         v1, v2 = st.columns(2)
         with v1:
-            st.plotly_chart(build_radar_chart(results), use_container_width=True)
+            st.plotly_chart(build_radar_chart(results), width="stretch")
         with v2:
-            st.plotly_chart(build_bubble_chart(results), use_container_width=True)
-        st.plotly_chart(build_decision_matrix(results), use_container_width=True)
+            st.plotly_chart(build_bubble_chart(results), width="stretch")
+        st.plotly_chart(build_decision_matrix(results), width="stretch")
 
         df = pd.DataFrame([
             {"Destination": d["name"], "Weather": d["breakdown"]["weather"], "Cost": d["breakdown"]["cost"],
@@ -266,7 +267,7 @@ def main() -> None:
             for d in results
         ])
         melted = df.melt(id_vars="Destination", var_name="Criterion", value_name="Score")
-        st.plotly_chart(px.bar(melted, x="Destination", y="Score", color="Criterion", barmode="group"), use_container_width=True)
+        st.plotly_chart(px.bar(melted, x="Destination", y="Score", color="Criterion", barmode="group"), width="stretch")
 
     st.markdown('<p class="section-title">Explore one destination</p>', unsafe_allow_html=True)
     selected = st.selectbox(
