@@ -12,7 +12,7 @@ from typing import Any
 import requests
 
 from src.config import GOOGLE_MAPS_API_KEY, usable_api_key
-from src.data.destinations import DESTINATIONS, Destination
+from src.data.destinations import Destination
 from src.database.models import cache_places, get_cached_places, get_session
 
 # How long discovered destination lists are cached (7 days)
@@ -220,11 +220,11 @@ class DestinationDiscoveryService:
                 return self._dests_from_cache(cached["data"])
 
             if not self.api_key:
-                return list(DESTINATIONS)
+                return []
 
             dests = self._discover(region)
             if not dests:
-                return list(DESTINATIONS)
+                return []
 
             serialised = [self._dest_to_dict(d) for d in dests]
             cache_places(
@@ -264,11 +264,6 @@ class DestinationDiscoveryService:
                 seen_ids.add(d.id)
                 dests.append(d)
 
-        # Always include hardcoded list so we never return an empty pool
-        for hc in DESTINATIONS:
-            if hc.id not in seen_ids:
-                seen_ids.add(hc.id)
-                dests.append(hc)
 
         return dests
 
