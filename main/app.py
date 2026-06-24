@@ -58,12 +58,16 @@ def get_engine() -> RecommendationEngine:
     return RecommendationEngine()
 
 
-def render_sidebar() -> tuple[UserPreferences, str, int]:
+def render_sidebar() -> tuple[UserPreferences, str, int, str]:
     st.sidebar.header("Your trip preferences")
-
+ 
     preset = st.sidebar.selectbox("Quick preset", ["Custom"] + list(PRESETS.keys()))
     preset_prefs = PRESETS.get(preset) if preset != "Custom" else None
-
+ 
+    # Region picker — new addition
+    from src.services.discovery_service import REGIONS
+    region = st.sidebar.selectbox("Region", REGIONS, index=0)
+ 
     origin = st.sidebar.text_input("Flying from (airport code)", value=ORIGIN_AIRPORT).upper()
     min_temp = st.sidebar.slider("Min temperature (°C)", 20, 35, int(preset_prefs.min_temp_c) if preset_prefs else 26)
     max_temp = st.sidebar.slider("Max temperature (°C)", 25, 40, int(preset_prefs.max_temp_c) if preset_prefs else 34)
@@ -74,7 +78,7 @@ def render_sidebar() -> tuple[UserPreferences, str, int]:
     )
     min_nightlife = st.sidebar.slider("Min nightlife venues nearby", 1, 15, preset_prefs.min_nightlife_venues if preset_prefs else 3)
     top_n = st.sidebar.slider("How many results", 3, 10, 5)
-
+ 
     with st.sidebar.expander("Scoring weights", expanded=False):
         w_weather = st.slider("Weather", 0.0, 1.0, preset_prefs.weather_weight if preset_prefs else 0.25, 0.05)
         w_cost = st.slider("Cost", 0.0, 1.0, preset_prefs.cost_weight if preset_prefs else 0.25, 0.05)
@@ -82,14 +86,14 @@ def render_sidebar() -> tuple[UserPreferences, str, int]:
         w_adventure = st.slider("Adventure", 0.0, 1.0, preset_prefs.adventure_weight if preset_prefs else 0.20, 0.05)
         w_weather, w_cost, w_nightlife, w_adventure = normalize_weights(w_weather, w_cost, w_nightlife, w_adventure)
         st.caption(f"Weights normalised to 100%: weather {w_weather:.0%}, cost {w_cost:.0%}, nightlife {w_nightlife:.0%}, adventure {w_adventure:.0%}")
-
+ 
     default_tags = list(preset_prefs.preferred_tags) if preset_prefs and preset_prefs.preferred_tags else ["diving", "culture"]
     tags = st.sidebar.multiselect(
         "What you are into",
         ["surfing", "diving", "hiking", "culture", "snorkeling", "kayaking", "food"],
         default=default_tags,
     )
-
+ 
     prefs = UserPreferences(
         min_temp_c=float(min_temp),
         max_temp_c=float(max_temp),
@@ -102,7 +106,7 @@ def render_sidebar() -> tuple[UserPreferences, str, int]:
         adventure_weight=w_adventure,
         preferred_tags=tags,
     )
-    return prefs, origin, top_n
+    return prefs, origin, top_n, region  # now returns region too
 
 
 def export_results_csv(results: list[dict]) -> bytes:
@@ -201,17 +205,16 @@ def render_destination_detail(dest: dict) -> None:
 def main() -> None:
     render_hero()
     render_status_pills(bool(OPENWEATHER_API_KEY), bool(GOOGLE_MAPS_API_KEY), bool(OPENAI_API_KEY), ORIGIN_AIRPORT)
-    prefs, origin, top_n = render_sidebar()
+    prefs, origin, top_n, region = render_sidebar()
 
-    if st.sidebar.button("Find destinations", type="primary", width="stretch"):
-        with st.spinner("Fetching weather and venue data..."):
+    if st.sidebar.button("Find destinations", type="primary", use_container_width=True):
+        with st.spinner("Discovering and scoring destinations worldwide..."):
             engine = get_engine()
-            results, summary, portfolio = engine.recommend(prefs, origin, top_n)
+            results, summary, portfolio = engine.recommend(prefs, origin, top_n, region=region)
             st.session_state["results"] = results
             st.session_state["summary"] = summary
             st.session_state["portfolio"] = portfolio
-            st.session_state["all_map"] = engine.get_all_for_map(prefs, origin)
-
+            st.session_state["all_map"] = engine.get_all_for_map(prefs, origin, region=region)
     results: list[dict] = st.session_state.get("results", [])
     summary: str = st.session_state.get("summary", "")
     portfolio: list[str] = st.session_state.get("portfolio", [])

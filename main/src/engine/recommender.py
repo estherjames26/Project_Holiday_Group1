@@ -6,9 +6,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.data.destinations import DESTINATIONS, Destination
+from src.data.destinations import Destination
 from src.database.models import get_session, log_recommendation
 from src.engine.insights import generate_destination_insights, generate_portfolio_insights
+from src.services.discovery_service import DestinationDiscoveryService
 from src.services.google_geocoding_service import GoogleGeocodingService
 from src.services.google_places_service import GooglePlacesService
 from src.services.llm_service import LLMService
@@ -47,6 +48,7 @@ class RecommendationEngine:
         self.geocoding = GoogleGeocodingService()
         self.costs = CostScraperService()
         self.llm = LLMService()
+        self.discovery = DestinationDiscoveryService()
 
     def recommend(
         self,
@@ -54,11 +56,15 @@ class RecommendationEngine:
         origin_airport: str = "LHR",
         top_n: int = 5,
         persist: bool = True,
+        region: str = "Global",
     ) -> tuple[list[dict[str, Any]], str, list[str]]:
         self.costs.origin = origin_airport
-        scored: list[ScoredDestination] = []
 
-        for dest in DESTINATIONS:
+        # Discover destinations dynamically (cached long-term)
+        destinations = self.discovery.get_destinations(region)
+
+        scored: list[ScoredDestination] = []
+        for dest in destinations:
             result = self._score_destination(dest, prefs)
             if result:
                 scored.append(result)
@@ -231,10 +237,16 @@ class RecommendationEngine:
             },
         }
 
-    def get_all_for_map(self, prefs: UserPreferences, origin: str = "LHR") -> list[dict[str, Any]]:
+    def get_all_for_map(
+        self,
+        prefs: UserPreferences,
+        origin: str = "LHR",
+        region: str = "Global",
+    ) -> list[dict[str, Any]]:
         self.costs.origin = origin
+        destinations = self.discovery.get_destinations(region)
         results = []
-        for dest in DESTINATIONS:
+        for dest in destinations:
             s = self._score_destination(dest, prefs)
             if s:
                 results.append(self._to_dict(s))
