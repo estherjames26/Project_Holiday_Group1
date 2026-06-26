@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -168,8 +169,12 @@ class CostScraperService:
                 )
                 scrape_sources["flight"] = flight_source
 
-            meal = numbeo.get("meal_inexpensive") or fallback["meal"]
-            scrape_sources["meal"] = numbeo.get("meal_source", "fallback")
+            if numbeo.get("meal_inexpensive") is not None:
+                meal = numbeo["meal_inexpensive"]
+                scrape_sources["meal"] = numbeo.get("meal_source", "numbeo-scrape")
+            else:
+                meal = fallback["meal"]
+                scrape_sources["meal"] = "fallback"
 
             if numbeo.get("rent_monthly_usd"):
                 airbnb = round(numbeo["rent_monthly_usd"] / 30, 2)
@@ -182,7 +187,13 @@ class CostScraperService:
                 scrape_sources["airbnb"] = "fallback"
                 scrape_sources["hotel"] = "fallback"
 
-            source_parts = sorted({v for v in scrape_sources.values() if v != "fallback"})
+            source_parts = sorted(
+                {
+                    value
+                    for key, value in scrape_sources.items()
+                    if key != "origin" and value != "fallback"
+                }
+            )
             source = "+".join(source_parts) if source_parts else "fallback"
 
             cache_costs(
@@ -193,6 +204,7 @@ class CostScraperService:
                 airbnb,
                 meal,
                 source,
+                scrape_sources,
             )
 
             total = flight_usd + (hotel * 7) + (meal * 7 * 3)
@@ -428,6 +440,7 @@ class CostScraperService:
         cache_id = row.destination_id or ""
         origin = cache_id.split(":", 1)[0] if ":" in cache_id else ORIGIN_AIRPORT
         dest_id = cache_id.split(":", 1)[1] if ":" in cache_id else cache_id
+        scrape_sources = CostScraperService._source_details_from_row(row, origin)
         return CostEstimate(
             destination_id=dest_id,
             flight_estimate_usd=row.flight_estimate_usd,
@@ -436,5 +449,46 @@ class CostScraperService:
             meal_index=row.meal_index,
             total_7_night_usd=round(total, 2),
             source=row.source or "cache",
-            scrape_sources={"cached": row.source or "cache", "origin": origin},
+            scrape_sources=scrape_sources,
         )
+
+    @staticmethod
+    def _source_details_from_row(row: Any, origin: str) -> dict[str, str]:
+        raw_details = getattr(row, "source_details", None)
+        if raw_details:
+            try:
+                loaded = json.loads(raw_details)
+                if isinstance(loaded, dict):
+                    details = {
+                        str(key): str(value)
+                        for key, value in loaded.items()
+                        if value is not None
+                    }
+                    details["origin"] = origin
+                    return details
+            except (TypeError, json.JSONDecodeError):
+                pass
+
+        source = row.source or "cache"
+        details: dict[str, str] = {"cached": source, "origin": origin}
+
+        for part in source.split("+"):
+            part = part.strip()
+            lower = part.lower()
+            if not part or part.upper() == origin:
+                continue
+            if lower.startswith(("google-flights", "cheapflights-scrape", "fallback-estimate")):
+                details["flight"] = part
+            elif lower.startswith(("numbeo-scrape", "numbeo:")):
+                details["meal"] = part
+            elif lower == "numbeo-rent-estimate":
+                details["hotel"] = part
+            elif lower == "numbeo-rent-scrape":
+                details["airbnb"] = part
+
+        if source != "cache":
+            details.setdefault("meal", "fallback")
+            details.setdefault("hotel", "fallback")
+            details.setdefault("airbnb", "fallback")
+
+        return details
