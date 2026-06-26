@@ -15,6 +15,14 @@ from scrape_costs import CostScraperService
 from api_weather import WeatherService
 
 
+def normalize_weights(w_w: float, w_c: float, w_n: float, w_a: float) -> tuple[float, float, float, float]:
+    """Scale weights so they sum to 1.0."""
+    total = w_w + w_c + w_n + w_a
+    if total <= 0:
+        return 0.25, 0.25, 0.25, 0.25
+    return w_w / total, w_c / total, w_n / total, w_a / total
+
+
 @dataclass
 class UserPreferences:
     min_temp_c: float = 26.0
@@ -54,7 +62,8 @@ class RecommendationEngine:
         top_n: int = 5,
         persist: bool = True,
     ) -> tuple[list[dict[str, Any]], str, list[str]]:
-        self.costs.origin = origin_airport
+        self.costs.origin = origin_airport.upper().strip()[:3]
+        prefs = self._normalise_prefs(prefs)
         scored: list[ScoredDestination] = []
         candidates = get_destinations()
 
@@ -84,11 +93,38 @@ class RecommendationEngine:
         if persist and output:
             session = get_session()
             try:
-                log_recommendation(session, origin_airport, prefs.__dict__, output)
+                log_recommendation(
+                    session,
+                    origin_airport.upper().strip()[:3],
+                    prefs.__dict__,
+                    output,
+                )
             finally:
                 session.close()
 
         return output, summary, portfolio
+
+    @staticmethod
+    def _normalise_prefs(prefs: UserPreferences) -> UserPreferences:
+        """Ensure scoring weights always sum to 1.0."""
+        w_w, w_c, w_n, w_a = normalize_weights(
+            prefs.weather_weight,
+            prefs.cost_weight,
+            prefs.nightlife_weight,
+            prefs.adventure_weight,
+        )
+        return UserPreferences(
+            min_temp_c=prefs.min_temp_c,
+            max_temp_c=max(prefs.max_temp_c, prefs.min_temp_c),
+            max_wind_ms=prefs.max_wind_ms,
+            max_budget_usd=prefs.max_budget_usd,
+            min_nightlife_venues=prefs.min_nightlife_venues,
+            weather_weight=w_w,
+            cost_weight=w_c,
+            nightlife_weight=w_n,
+            adventure_weight=w_a,
+            preferred_tags=list(prefs.preferred_tags),
+        )
 
     def _score_destination(
         self,
@@ -143,6 +179,7 @@ class RecommendationEngine:
                 "total_7_night_usd": costs.total_7_night_usd,
                 "source": costs.source,
                 "scrape_sources": costs.scrape_sources,
+                "origin_airport": self.costs.origin,
             },
             amenities={
                 "bars": [self._place_dict(p) for p in amenities.bars],
@@ -232,7 +269,8 @@ class RecommendationEngine:
         }
 
     def get_all_for_map(self, prefs: UserPreferences, origin: str = "LHR") -> list[dict[str, Any]]:
-        self.costs.origin = origin
+        self.costs.origin = origin.upper().strip()[:3]
+        prefs = self._normalise_prefs(prefs)
         results = []
         candidates = get_destinations()
         for dest in candidates:

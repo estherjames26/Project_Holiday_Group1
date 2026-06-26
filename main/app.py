@@ -24,7 +24,7 @@ from ranking import RecommendationEngine, UserPreferences
 from api_google_places import build_google_maps_embed_url
 from folium_maps import build_amenity_heatmap, build_amenity_markers_map, build_destination_map
 from charts import build_amenity_breakdown_chart, build_bubble_chart, build_decision_matrix, build_radar_chart
-from sidebar import PRESETS, normalize_weights
+from sidebar import PRESETS, apply_preset_sidebar_state, render_origin_airport, render_scoring_weights, search_fingerprint
 from page_styling import (
     inject_styles,
     render_dest_card,
@@ -50,36 +50,52 @@ def get_engine() -> RecommendationEngine:
     return RecommendationEngine()
 
 
-def render_sidebar() -> tuple[UserPreferences, str, int]:
+def render_sidebar() -> tuple[UserPreferences, str, int, bool]:
     st.sidebar.header("Your trip preferences")
 
     preset = st.sidebar.selectbox("Quick preset", ["Custom"] + list(PRESETS.keys()))
     preset_prefs = PRESETS.get(preset) if preset != "Custom" else None
+    apply_preset_sidebar_state(preset)
 
-    origin = st.sidebar.text_input("Flying from (airport code)", value=ORIGIN_AIRPORT).upper()
-    min_temp = st.sidebar.slider("Min temperature (°C)", 20, 35, int(preset_prefs.min_temp_c) if preset_prefs else 26)
-    max_temp = st.sidebar.slider("Max temperature (°C)", 25, 40, int(preset_prefs.max_temp_c) if preset_prefs else 34)
-    max_wind = st.sidebar.slider("Max wind (m/s)", 5.0, 20.0, preset_prefs.max_wind_ms if preset_prefs else 12.0, 0.5)
+    origin, origin_valid = render_origin_airport(ORIGIN_AIRPORT)
+    min_temp = st.sidebar.slider(
+        "Min temperature (°C)", 20, 35,
+        int(preset_prefs.min_temp_c) if preset_prefs else 26,
+        key="sidebar_min_temp",
+    )
+    max_temp_default = int(preset_prefs.max_temp_c) if preset_prefs else 34
+    max_temp = st.sidebar.slider(
+        "Max temperature (°C)",
+        min_temp,
+        40,
+        max(max_temp_default, min_temp),
+        key="sidebar_max_temp",
+    )
+    max_wind = st.sidebar.slider(
+        "Max wind (m/s)", 5.0, 20.0,
+        preset_prefs.max_wind_ms if preset_prefs else 12.0, 0.5,
+        key="sidebar_max_wind",
+    )
     max_budget = st.sidebar.slider(
         "Max budget (USD, 7 nights)", 1000, 8000,
         int(preset_prefs.max_budget_usd) if preset_prefs else 3500, 100,
+        key="sidebar_max_budget",
     )
-    min_nightlife = st.sidebar.slider("Min nightlife venues nearby", 1, 15, preset_prefs.min_nightlife_venues if preset_prefs else 3)
-    top_n = st.sidebar.slider("How many results", 3, 10, 5)
+    min_nightlife = st.sidebar.slider(
+        "Min nightlife venues nearby", 1, 15,
+        preset_prefs.min_nightlife_venues if preset_prefs else 3,
+        key="sidebar_min_nightlife",
+    )
+    top_n = st.sidebar.slider("How many results", 3, 10, 5, key="sidebar_top_n")
 
-    with st.sidebar.expander("Scoring weights", expanded=False):
-        w_weather = st.slider("Weather", 0.0, 1.0, preset_prefs.weather_weight if preset_prefs else 0.25, 0.05)
-        w_cost = st.slider("Cost", 0.0, 1.0, preset_prefs.cost_weight if preset_prefs else 0.25, 0.05)
-        w_nightlife = st.slider("Nightlife", 0.0, 1.0, preset_prefs.nightlife_weight if preset_prefs else 0.30, 0.05)
-        w_adventure = st.slider("Adventure", 0.0, 1.0, preset_prefs.adventure_weight if preset_prefs else 0.20, 0.05)
-        w_weather, w_cost, w_nightlife, w_adventure = normalize_weights(w_weather, w_cost, w_nightlife, w_adventure)
-        st.caption(f"Weights normalised to 100%: weather {w_weather:.0%}, cost {w_cost:.0%}, nightlife {w_nightlife:.0%}, adventure {w_adventure:.0%}")
+    w_weather, w_cost, w_nightlife, w_adventure = render_scoring_weights(preset_prefs, preset)
 
     default_tags = list(preset_prefs.preferred_tags) if preset_prefs and preset_prefs.preferred_tags else ["diving", "culture"]
     tags = st.sidebar.multiselect(
         "What you are into",
         ["surfing", "diving", "hiking", "culture", "snorkeling", "kayaking", "food"],
         default=default_tags,
+        key="sidebar_tags",
     )
 
     prefs = UserPreferences(
@@ -94,7 +110,7 @@ def render_sidebar() -> tuple[UserPreferences, str, int]:
         adventure_weight=w_adventure,
         preferred_tags=tags,
     )
-    return prefs, origin, top_n
+    return prefs, origin, top_n, origin_valid
 
 
 def export_results_csv(results: list[dict]) -> bytes:
@@ -179,7 +195,13 @@ def render_destination_detail(dest: dict) -> None:
             "Item": ["Return flight", "Hotel per night", "Airbnb per night", "Meal cost index"],
             "USD": [c["flight_usd"], c["hotel_nightly_usd"], c["airbnb_nightly_usd"], c["meal_index"]],
         }), hide_index=True, width="stretch")
-        st.caption(f"Estimated 7-night total: ${c['total_7_night_usd']:,.2f} (source: {c['source']})")
+        st.caption(
+            f"Estimated 7-night total: ${c['total_7_night_usd']:,.2f} "
+            f"(return flight from **{c.get('origin_airport', '—')}**: ${c['flight_usd']:,.0f})"
+        )
+        flight_detail = (c.get("scrape_sources") or {}).get("flight", c.get("source", ""))
+        if flight_detail:
+            st.caption(f"Flight estimate source: {flight_detail}")
 
         st.markdown("---")
         st.markdown("**Airbnb listings**")
@@ -269,21 +291,43 @@ def render_destination_detail(dest: dict) -> None:
 
 def main() -> None:
     render_hero()
-    render_status_pills(bool(OPENWEATHER_API_KEY), bool(GOOGLE_MAPS_API_KEY), bool(OPENAI_API_KEY), ORIGIN_AIRPORT)
-    prefs, origin, top_n = render_sidebar()
+    prefs, origin, top_n, origin_valid = render_sidebar()
+    render_status_pills(bool(OPENWEATHER_API_KEY), bool(GOOGLE_MAPS_API_KEY), bool(OPENAI_API_KEY), origin)
 
-    if st.sidebar.button("Find destinations", type="primary", width="stretch"):
-        with st.spinner("Fetching weather and venue data..."):
+    find_clicked = st.sidebar.button(
+        "Find destinations",
+        type="primary",
+        width="stretch",
+        disabled=not origin_valid,
+    )
+    if not origin_valid:
+        st.sidebar.caption("Choose a valid departure airport to search.")
+
+    if find_clicked:
+        with st.spinner(f"Fetching weather and venue data (flights from {origin})..."):
             engine = get_engine()
             results, summary, portfolio = engine.recommend(prefs, origin, top_n)
             st.session_state["results"] = results
             st.session_state["summary"] = summary
             st.session_state["portfolio"] = portfolio
             st.session_state["all_map"] = engine.get_all_for_map(prefs, origin)
+            st.session_state["search_origin"] = origin
+            st.session_state["search_fingerprint"] = search_fingerprint(prefs, origin, top_n)
 
     results: list[dict] = st.session_state.get("results", [])
     summary: str = st.session_state.get("summary", "")
     portfolio: list[str] = st.session_state.get("portfolio", [])
+
+    if results:
+        current_fp = search_fingerprint(prefs, origin, top_n)
+        if st.session_state.get("search_fingerprint") != current_fp:
+            st.warning(
+                "Your sidebar settings have changed since the last search "
+                "(airport, budget, weights, tags, etc.). "
+                "Click **Find destinations** again to refresh rankings and prices."
+            )
+        elif st.session_state.get("search_origin") and st.session_state["search_origin"] != origin:
+            st.info(f"Showing results for flights from **{st.session_state['search_origin']}**. Re-search to update for **{origin}**.")
 
     if not results:
         st.info("Set your preferences in the sidebar, then click **Find destinations**.")

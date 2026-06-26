@@ -76,12 +76,41 @@ NUMBEO_COUNTRY_FALLBACKS: dict[str, str] = {
 }
 
 
+# UK/Ireland hubs where Cheapflights.co.uk prices are meaningful for the selected origin.
+UK_CHEAPFLIGHTS_ORIGINS = frozenset({"LHR", "LGW", "STN", "MAN", "BHX", "EDI", "BRS", "GLA", "NCL", "LPL", "DUB"})
+
+# Cheapflights.co.uk lists London-centric fares — scale for other departure airports.
+# Google Flights results are already origin-specific and are not adjusted.
+ORIGIN_FLIGHT_MULTIPLIERS: dict[str, float] = {
+    "LHR": 1.00,
+    "LGW": 0.98,
+    "STN": 0.90,
+    "MAN": 0.86,
+    "BHX": 0.84,
+    "EDI": 0.92,
+    "BRS": 0.82,
+    "GLA": 0.88,
+    "NCL": 0.85,
+    "LPL": 0.84,
+    "DUB": 0.94,
+    "CDG": 1.08,
+    "AMS": 1.05,
+    "FRA": 1.06,
+    "JFK": 1.18,
+    "LAX": 1.32,
+    "MIA": 1.12,
+    "DXB": 0.96,
+    "SIN": 1.14,
+    "SYD": 1.38,
+}
+
+
 class CostScraperService:
     NUMBEO_BASE = "https://www.numbeo.com/cost-of-living/in"
     CHEAPFLIGHTS_BASE = "https://www.cheapflights.co.uk/flights-to"
 
     def __init__(self, origin_airport: str | None = None) -> None:
-        self.origin = origin_airport or ORIGIN_AIRPORT
+        self.origin = (origin_airport or ORIGIN_AIRPORT).upper().strip()[:3]
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": (
@@ -92,6 +121,11 @@ class CostScraperService:
             "Accept-Language": "en-GB,en;q=0.9",
         })
 
+    @staticmethod
+    def _cache_key(origin: str, destination_id: str) -> str:
+        """Flight costs depend on origin — cache key includes both."""
+        return f"{origin.upper()}:{destination_id}"[:64]
+
     def get_costs(
         self,
         destination_id: str,
@@ -99,32 +133,40 @@ class CostScraperService:
         country: str = "",
         airport_code: str = "",
     ) -> CostEstimate:
+        cache_id = self._cache_key(self.origin, destination_id)
         db = get_session()
         try:
-            cached = get_cached_costs(db, destination_id)
+            cached = get_cached_costs(db, cache_id)
             if cached and self._row_is_fresh(cached):
-                return self._from_row(cached)
+                estimate = self._from_row(cached)
+                estimate.destination_id = destination_id
+                estimate.scrape_sources = {
+                    **estimate.scrape_sources,
+                    "origin": self.origin,
+                }
+                return estimate
 
             numbeo_slug = self._resolve_numbeo_slug(destination_id, city_name, country)
             numbeo = self._scrape_numbeo(numbeo_slug) if numbeo_slug else {}
 
             flight_slug = self._resolve_cheapflights_slug(city_name, country)
-            flight_usd, flight_source = self._scrape_cheapflights(flight_slug)
+            flight_usd, flight_source = self._resolve_flight_price(flight_slug, airport_code)
 
             fallback = FALLBACK_COSTS.get(
                 destination_id,
                 {"flight": 700, "hotel": 70, "airbnb": 50, "meal": 35},
             )
 
-            scrape_sources: dict[str, str] = {}
+            scrape_sources: dict[str, str] = {"origin": self.origin}
 
             if flight_usd is not None:
                 scrape_sources["flight"] = flight_source
             else:
-                flight_usd = self._scrape_flight_hint(airport_code) or fallback["flight"]
-                scrape_sources["flight"] = (
-                    "google-flights-scrape" if flight_usd != fallback["flight"] else "fallback"
+                flight_usd, flight_source = self._apply_origin_adjustment(
+                    fallback["flight"],
+                    "fallback-estimate",
                 )
+                scrape_sources["flight"] = flight_source
 
             meal = numbeo.get("meal_inexpensive") or fallback["meal"]
             scrape_sources["meal"] = numbeo.get("meal_source", "fallback")
@@ -145,7 +187,7 @@ class CostScraperService:
 
             cache_costs(
                 db,
-                destination_id,
+                cache_id,
                 flight_usd,
                 hotel,
                 airbnb,
@@ -279,6 +321,40 @@ class CostScraperService:
         }
         return slug_map.get(slug, slug)
 
+    def _apply_origin_adjustment(
+        self,
+        base_usd: float,
+        source_label: str,
+    ) -> tuple[float, str]:
+        """Scale London-centric or generic fares for the selected departure airport."""
+        mult = ORIGIN_FLIGHT_MULTIPLIERS.get(self.origin, 1.0)
+        if abs(mult - 1.0) < 0.001:
+            return round(base_usd, 2), f"{source_label} ({self.origin})"
+        adjusted = round(base_usd * mult, 2)
+        return adjusted, f"{source_label} ×{mult:.2f} for {self.origin}"
+
+    def _resolve_flight_price(
+        self,
+        city_slug: str,
+        dest_airport: str,
+    ) -> tuple[float | None, str]:
+        """
+        Resolve flight price for the selected origin airport.
+        1) Google Flights (origin in query — most accurate)
+        2) Cheapflights UK + origin multiplier (London-centric listing)
+        3) Caller falls back to hardcoded estimate × origin multiplier
+        """
+        google_price = self._scrape_flight_hint(dest_airport)
+        if google_price is not None:
+            return round(google_price, 2), f"google-flights:{self.origin}->{dest_airport}"
+
+        if self.origin in UK_CHEAPFLIGHTS_ORIGINS:
+            price, source = self._scrape_cheapflights(city_slug)
+            if price is not None:
+                return self._apply_origin_adjustment(price, source)
+
+        return None, "flight-scrape-failed"
+
     def _scrape_cheapflights(self, city_slug: str) -> tuple[float | None, str]:
         """Scrape minimum return fare from Cheapflights UK listing pages."""
         url = f"{self.CHEAPFLIGHTS_BASE}-{city_slug}/"
@@ -349,13 +425,16 @@ class CostScraperService:
     @staticmethod
     def _from_row(row: Any) -> CostEstimate:
         total = row.flight_estimate_usd + (row.hotel_nightly_usd * 7) + (row.meal_index * 7 * 3)
+        cache_id = row.destination_id or ""
+        origin = cache_id.split(":", 1)[0] if ":" in cache_id else ORIGIN_AIRPORT
+        dest_id = cache_id.split(":", 1)[1] if ":" in cache_id else cache_id
         return CostEstimate(
-            destination_id=row.destination_id,
+            destination_id=dest_id,
             flight_estimate_usd=row.flight_estimate_usd,
             hotel_nightly_usd=row.hotel_nightly_usd,
             airbnb_nightly_usd=row.airbnb_nightly_usd,
             meal_index=row.meal_index,
             total_7_night_usd=round(total, 2),
             source=row.source or "cache",
-            scrape_sources={"cached": row.source or "cache"},
+            scrape_sources={"cached": row.source or "cache", "origin": origin},
         )

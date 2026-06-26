@@ -32,7 +32,29 @@ def usable_api_key(raw: str | None) -> str:
 OPENWEATHER_API_KEY = usable_api_key(os.getenv("OPENWEATHER_API_KEY"))
 GOOGLE_MAPS_API_KEY = usable_api_key(os.getenv("GOOGLE_MAPS_API_KEY"))
 OPENAI_API_KEY = usable_api_key(os.getenv("OPENAI_API_KEY"))
-ORIGIN_AIRPORT = os.getenv("ORIGIN_AIRPORT", "LHR")
+ORIGIN_AIRPORT = os.getenv("ORIGIN_AIRPORT", "LHR").upper().strip()[:3]
+
+# Default departure airports shown in the sidebar (label → IATA code).
+COMMON_ORIGIN_AIRPORTS: dict[str, str] = {
+    "LHR — London Heathrow (UK)": "LHR",
+    "LGW — London Gatwick (UK)": "LGW",
+    "STN — London Stansted (UK)": "STN",
+    "MAN — Manchester (UK)": "MAN",
+    "BHX — Birmingham (UK)": "BHX",
+    "EDI — Edinburgh (UK)": "EDI",
+    "DUB — Dublin (Ireland)": "DUB",
+    "CDG — Paris Charles de Gaulle (France)": "CDG",
+    "AMS — Amsterdam (Netherlands)": "AMS",
+    "FRA — Frankfurt (Germany)": "FRA",
+    "JFK — New York (USA)": "JFK",
+    "LAX — Los Angeles (USA)": "LAX",
+    "MIA — Miami (USA)": "MIA",
+    "DXB — Dubai (UAE)": "DXB",
+    "SIN — Singapore": "SIN",
+    "SYD — Sydney (Australia)": "SYD",
+    "Custom airport code…": "__custom__",
+}
+
 GBP_TO_USD = float(os.getenv("GBP_TO_USD", "1.27"))
 
 _db_url = os.getenv("DATABASE_URL", "sqlite:///data/holiday_planner.db")
