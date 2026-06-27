@@ -12,7 +12,6 @@ Project_Holiday_Group1/     ← repo root (you are here after git clone)
 │   ├── .env.example
 │   └── ...
 ├── README.md               ← this file
-└── FLOWCHART.md            ← how the code flows (optional reading)
 ```
 
 ## First-time setup (new PC)

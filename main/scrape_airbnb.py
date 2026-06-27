@@ -124,15 +124,16 @@ def scrape_airbnb_listings(
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-
     listings_data: list[dict] = []
     prices: list[float] = []
     avg_price: float | None = None
+    driver: webdriver.Chrome | None = None
     detected_symbol = "£"
 
     try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+
         print(f"[airbnb] Navigating to: {url}")
         driver.get(url)
 
@@ -314,7 +315,11 @@ def scrape_airbnb_listings(
     except Exception as e:
         print(f"[airbnb] Error: {e}")
     finally:
-        driver.quit()
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     # ── 3. Persist to DB ───────────────────────────────────────────────────────
     if listings_data:

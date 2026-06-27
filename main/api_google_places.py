@@ -105,22 +105,25 @@ class GooglePlacesService:
             return self._mock_places(lat, lon)
 
         result: dict[str, list[dict]] = {}
-        for key, place_type in self.PLACE_TYPES.items():
-            resp = requests.get(
-                "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
-                params={
-                    "location": f"{lat},{lon}",
-                    "radius": radius_m,
-                    "type": place_type,
-                    "key": self.api_key,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
-                return self._mock_places(lat, lon)
-            result[key] = payload.get("results", [])[:10]
+        try:
+            for key, place_type in self.PLACE_TYPES.items():
+                resp = requests.get(
+                    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+                    params={
+                        "location": f"{lat},{lon}",
+                        "radius": radius_m,
+                        "type": place_type,
+                        "key": self.api_key,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
+                    return self._mock_places(lat, lon)
+                result[key] = payload.get("results", [])[:10]
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return self._mock_places(lat, lon)
         return result
 
     @staticmethod

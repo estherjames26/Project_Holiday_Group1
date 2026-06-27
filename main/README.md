@@ -58,8 +58,6 @@ Full first-time steps (clone, venv, keys, troubleshooting): see **`../README.md`
 | **`pages/1_Compare.py`** | Compare two or three destinations |
 | **`pages/2_History.py`** | Past searches and cache stats |
 
-Code flow diagram: **`../FLOWCHART.md`**
-
 ---
 
 ## Environment file

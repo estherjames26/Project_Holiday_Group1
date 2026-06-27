@@ -21,6 +21,7 @@ from settings import GOOGLE_MAPS_API_KEY, OPENAI_API_KEY, OPENWEATHER_API_KEY, O
 from database import init_db
 from trip_notes import generate_destination_insights
 from ranking import RecommendationEngine, UserPreferences
+from explainability import build_data_source_summary, build_score_explanation
 from api_google_places import build_google_maps_embed_url
 from folium_maps import build_amenity_heatmap, build_amenity_markers_map, build_destination_map
 from charts import build_amenity_breakdown_chart, build_bubble_chart, build_decision_matrix, build_radar_chart
@@ -163,6 +164,20 @@ def render_destination_detail(dest: dict) -> None:
     c3.metric("7-night cost", f"${dest['total_cost_usd']:,.0f}")
     c4.metric("Nightlife nearby", dest["nightlife_total"])
 
+    prefs_for_explanation = st.session_state.get("last_prefs", UserPreferences())
+
+    with st.expander("Why this destination?"):
+        for line in build_score_explanation(dest, prefs_for_explanation):
+            st.markdown(f"- {line}")
+
+    with st.expander("Data sources and reliability"):
+        for line in build_data_source_summary(
+            dest,
+            bool(OPENWEATHER_API_KEY),
+            bool(GOOGLE_MAPS_API_KEY),
+        ):
+            st.markdown(f"- {line}")
+
     render_insight_cards(dest)
     st.write(dest["description"])
 
@@ -289,6 +304,36 @@ def render_destination_detail(dest: dict) -> None:
         else:
             st.info("No Airbnb listings found for this destination.")
 
+    with tab4:
+        amenities = dest["amenities"]
+        st.plotly_chart(build_amenity_breakdown_chart(dest), width="stretch")
+
+        venue_groups = [
+            ("Bars", amenities["bars"]),
+            ("Restaurants", amenities["restaurants"]),
+            ("Night clubs", amenities["night_clubs"]),
+        ]
+
+        for label, places in venue_groups:
+            st.markdown(f"**{label}**")
+            if places:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Name": place["name"],
+                                "Rating": place.get("rating"),
+                                "Address": place.get("address", ""),
+                            }
+                            for place in places
+                        ]
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+            else:
+                st.caption(f"No {label.lower()} found nearby.")
+
 def main() -> None:
     render_hero()
     prefs, origin, top_n, origin_valid = render_sidebar()
@@ -310,6 +355,7 @@ def main() -> None:
             st.session_state["results"] = results
             st.session_state["summary"] = summary
             st.session_state["portfolio"] = portfolio
+            st.session_state["last_prefs"] = prefs
             st.session_state["all_map"] = engine.get_all_for_map(prefs, origin)
             st.session_state["search_origin"] = origin
             st.session_state["search_fingerprint"] = search_fingerprint(prefs, origin, top_n)

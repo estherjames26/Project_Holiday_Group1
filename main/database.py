@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -86,6 +87,7 @@ class CostCache(Base):
     airbnb_nightly_usd = Column(Float)
     meal_index = Column(Float)
     source = Column(String(256))
+    source_details = Column(Text)
     fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class AirbnbListing(Base):
@@ -193,7 +195,26 @@ SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(_engine)
+    _ensure_schema_migrations()
     purge_mock_api_cache()
+
+
+def _ensure_schema_migrations() -> None:
+    """Apply small backwards-compatible SQLite schema updates."""
+    inspector = inspect(_engine)
+    if inspector.has_table("cost_cache"):
+        columns = {col["name"] for col in inspector.get_columns("cost_cache")}
+        if "source_details" not in columns:
+            with _engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE cost_cache ADD COLUMN source_details TEXT")
+
+    if inspector.has_table("airbnb_listings"):
+        columns = {col["name"] for col in inspector.get_columns("airbnb_listings")}
+        with _engine.begin() as conn:
+            if "latitude" not in columns:
+                conn.exec_driver_sql("ALTER TABLE airbnb_listings ADD COLUMN latitude FLOAT")
+            if "longitude" not in columns:
+                conn.exec_driver_sql("ALTER TABLE airbnb_listings ADD COLUMN longitude FLOAT")
 
 
 def get_session() -> Session:
@@ -244,14 +265,17 @@ def cache_costs(
     airbnb: float,
     meal_index: float,
     source: str,
+    source_details: dict[str, str] | None = None,
 ) -> None:
     row = session.get(CostCache, destination_id)
+    source_details_json = json.dumps(source_details or {})
     if row:
         row.flight_estimate_usd = flight
         row.hotel_nightly_usd = hotel
         row.airbnb_nightly_usd = airbnb
         row.meal_index = meal_index
         row.source = source
+        row.source_details = source_details_json
         row.fetched_at = datetime.now(timezone.utc)
     else:
         session.add(
@@ -262,6 +286,7 @@ def cache_costs(
                 airbnb_nightly_usd=airbnb,
                 meal_index=meal_index,
                 source=source,
+                source_details=source_details_json,
             )
         )
     session.commit()

@@ -92,37 +92,41 @@ class GooglePlacesService:
     def _fetch_via_sdk(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
         location = (lat, lon)
         result = {}
-        for key, place_type in self.PLACE_TYPES.items():
-            resp = self._client.places_nearby(location=location, radius=radius_m, type=place_type)
-            results = resp.get("results", [])[:10]
-            print(f"[Places SDK] {place_type} at {lat},{lon}: {len(results)} results, first={results[0]['name'] if results else 'none'}")
-            result[key] = results
-        return result
+        try:
+            for key, place_type in self.PLACE_TYPES.items():
+                resp = self._client.places_nearby(location=location, radius=radius_m, type=place_type)
+                results = resp.get("results", [])[:10]
+                print(f"[Places SDK] {place_type} at {lat},{lon}: {len(results)} results, first={results[0]['name'] if results else 'none'}")
+                result[key] = results
+            return result
+        except Exception:
+            return self._fetch_via_rest(lat, lon, radius_m)
 
     def _fetch_via_rest(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
-        payload = resp.json()
-        print(f"[Places API] status={payload.get('status')} error={payload.get('error_message', '')}")
-        if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
+        if not self.api_key:
             return self._mock_places(lat, lon)
-        
 
         result: dict[str, list[dict]] = {}
-        for key, place_type in self.PLACE_TYPES.items():
-            resp = requests.get(
-                "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
-                params={
-                    "location": f"{lat},{lon}",
-                    "radius": radius_m,
-                    "type": place_type,
-                    "key": self.api_key,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-            if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
-                return self._mock_places(lat, lon)
-            result[key] = payload.get("results", [])[:10]
+        try:
+            for key, place_type in self.PLACE_TYPES.items():
+                resp = requests.get(
+                    "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+                    params={
+                        "location": f"{lat},{lon}",
+                        "radius": radius_m,
+                        "type": place_type,
+                        "key": self.api_key,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                print(f"[Places API] status={payload.get('status')} error={payload.get('error_message', '')}")
+                if payload.get("status") not in (None, "OK", "ZERO_RESULTS"):
+                    return self._mock_places(lat, lon)
+                result[key] = payload.get("results", [])[:10]
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return self._mock_places(lat, lon)
         return result
 
     @staticmethod

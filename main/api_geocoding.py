@@ -31,9 +31,15 @@ class GoogleGeocodingService:
 
     def reverse_geocode(self, lat: float, lon: float) -> GeoInfo:
         if self._client:
-            return self._via_sdk(lat, lon)
+            try:
+                return self._via_sdk(lat, lon)
+            except Exception:
+                pass
         if self.api_key:
-            return self._via_rest(lat, lon)
+            try:
+                return self._via_rest(lat, lon)
+            except (requests.RequestException, ValueError, TypeError, KeyError):
+                pass
         return self._mock(lat, lon)
 
     def _via_sdk(self, lat: float, lon: float) -> GeoInfo:
