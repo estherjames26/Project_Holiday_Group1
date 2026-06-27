@@ -181,20 +181,85 @@ def render_destination_detail(dest: dict) -> None:
     render_insight_cards(dest)
     st.write(dest["description"])
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Map", "Weather", "Costs", "Venues"])
+    # Fetch Airbnb listings early so they can be placed on the main map
+    dest_id = dest["id"]
+    db = get_session()
+    try:
+        listings = get_airbnb_listings(db, dest_id)
+    finally:
+        db.close()
+
+    if not listings:
+        with st.spinner("Fetching Airbnb listings..."):
+            _, listings = scrape_airbnb_listings(
+                dest["name"],
+                dest["country"],
+                destination_id=dest_id,
+                limit=6,
+                dest_lat=dest["latitude"],
+                dest_lng=dest["longitude"],
+            )
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Map", "Weather", "Costs","Airbnb listings", "Venues"])
 
     with tab1:
         all_places = dest["amenities"]["bars"] + dest["amenities"]["restaurants"] + dest["amenities"]["night_clubs"]
         heat_places = [{"latitude": p["latitude"], "longitude": p["longitude"], "weight": p.get("weight", 1)} for p in all_places]
         c1, c2 = st.columns(2)
         with c1:
-            st_folium(build_amenity_heatmap(heat_places, dest["latitude"], dest["longitude"]), width=480, height=380)
+            st_folium(build_amenity_heatmap(heat_places, dest["latitude"], dest["longitude"]), width=480, height=380, key=f"heatmap_{dest['id']}")
         with c2:
-            st_folium(build_amenity_markers_map(
-                {"bar": dest["amenities"]["bars"], "restaurant": dest["amenities"]["restaurants"],
-                 "night_club": dest["amenities"]["night_clubs"]},
-                dest["latitude"], dest["longitude"],
-            ), width=480, height=380)
+            import folium
+            m = folium.Map(location=[dest["latitude"], dest["longitude"]], zoom_start=13, tiles="CartoDB positron")
+            
+            # Destination center marker
+            folium.Marker(
+                location=[dest["latitude"], dest["longitude"]],
+                popup=dest["name"],
+                icon=folium.Icon(color="blue", icon="info-sign")
+            ).add_to(m)
+            
+            # Add Venues to the map
+            for b in dest["amenities"]["bars"]:
+                folium.Marker(
+                    location=[b["latitude"], b["longitude"]],
+                    popup=f"🍸 {b['name']} ({b.get('rating', 'N/A')}⭐)",
+                    icon=folium.Icon(color="orange", icon="glass", prefix="fa")
+                ).add_to(m)
+            for r in dest["amenities"]["restaurants"]:
+                folium.Marker(
+                    location=[r["latitude"], r["longitude"]],
+                    popup=f"🍴 {r['name']} ({r.get('rating', 'N/A')}⭐)",
+                    icon=folium.Icon(color="green", icon="cutlery", prefix="fa")
+                ).add_to(m)
+            for nc in dest["amenities"]["night_clubs"]:
+                folium.Marker(
+                    location=[nc["latitude"], nc["longitude"]],
+                    popup=f"💃 {nc['name']} ({nc.get('rating', 'N/A')}⭐)",
+                    icon=folium.Icon(color="purple", icon="music", prefix="fa")
+                ).add_to(m)
+                
+            # Add Airbnb listings as red pins to the same venue map
+            if listings:
+                sym = listings[0].get("currency_symbol", "£")
+                for l in listings:
+                    if l.get("latitude") and l.get("longitude") and l["latitude"] != 0.0 and l["longitude"] != 0.0:
+                        price_label = f"{sym}{l['price_nightly']:.0f}/night" if l.get("price_nightly") else ""
+                        rating_label = f" · ⭐{l['rating']}" if l.get("rating") else ""
+                        url = l.get("listing_url", "")
+                        folium.Marker(
+                            location=[l["latitude"], l["longitude"]],
+                            popup=folium.Popup(
+                                f'<b><a href="{url}" target="_blank">{l["name"]}</a></b>'
+                                f"<br>{price_label}{rating_label}",
+                                max_width=220,
+                            ),
+                            tooltip=f"{l['name']} — {price_label}",
+                            icon=folium.Icon(color="red", icon="home", prefix="fa"),
+                        ).add_to(m)
+                        
+            st_folium(m, width=480, height=380, key=f"venue_map_{dest['id']}")
+
         embed_url = build_google_maps_embed_url(dest["latitude"], dest["longitude"], GOOGLE_MAPS_API_KEY)
         if embed_url:
             st.iframe(embed_url, height=320)
@@ -218,27 +283,8 @@ def render_destination_detail(dest: dict) -> None:
         if flight_detail:
             st.caption(f"Flight estimate source: {flight_detail}")
 
-        st.markdown("---")
-        st.markdown("**Airbnb listings**")
 
-        dest_id = dest["id"]
-        db = get_session()
-        try:
-            listings = get_airbnb_listings(db, dest_id)
-        finally:
-            db.close()
-
-        if not listings:
-            with st.spinner("Fetching Airbnb listings..."):
-                _, listings = scrape_airbnb_listings(
-                    dest["name"],
-                    dest["country"],
-                    destination_id=dest_id,
-                    limit=6,
-                    dest_lat=dest["latitude"],
-                    dest_lng=dest["longitude"],
-                )
-
+    with tab4:
         if listings:
             sym = listings[0].get("currency_symbol", "£")
             valid_prices = [r["price_nightly"] for r in listings if r["price_nightly"]]
@@ -270,69 +316,32 @@ def render_destination_detail(dest: dict) -> None:
                     if url:
                         st.link_button("View on Airbnb →", url)
                 st.divider()
-
-            # ── Map ───────────────────────────────────────────────────────────
-            import folium
-            mappable = [
-                l for l in listings
-                if l.get("latitude") and l.get("longitude")
-                and l["latitude"] != 0.0 and l["longitude"] != 0.0
-            ]
-            if mappable:
-                st.markdown("**Listings on map**")
-                m = folium.Map(
-                    location=[mappable[0]["latitude"], mappable[0]["longitude"]],
-                    zoom_start=13,
-                    tiles="CartoDB positron",
-                )
-                for l in mappable:
-                    price_label = f"{sym}{l['price_nightly']:.0f}/night" if l.get("price_nightly") else ""
-                    rating_label = f" · ⭐{l['rating']}" if l.get("rating") else ""
-                    url = l.get("listing_url", "")
-                    folium.Marker(
-                        location=[l["latitude"], l["longitude"]],
-                        popup=folium.Popup(
-                            f'<b><a href="{url}" target="_blank">{l["name"]}</a></b>'
-                            f"<br>{price_label}{rating_label}"
-                            f"<br><small>{l.get('bedrooms') or ''}</small>",
-                            max_width=220,
-                        ),
-                        tooltip=f"{l['name']} — {price_label}",
-                        icon=folium.Icon(color="red", icon="home", prefix="fa"),
-                    ).add_to(m)
-                st_folium(m, width=None, height=400)
         else:
             st.info("No Airbnb listings found for this destination.")
 
-    with tab4:
-        amenities = dest["amenities"]
-        st.plotly_chart(build_amenity_breakdown_chart(dest), width="stretch")
-
-        venue_groups = [
-            ("Bars", amenities["bars"]),
-            ("Restaurants", amenities["restaurants"]),
-            ("Night clubs", amenities["night_clubs"]),
+    with tab5:
+        st.markdown("### 📍 Nearby Venues")
+        amenities = dest.get("amenities", {})
+        categories = [
+            ("bars", "🍸 Bars & Pubs"),
+            ("restaurants", "🍴 Restaurants & Eateries"),
+            ("night_clubs", "💃 Nightclubs & Lounges")
         ]
-
-        for label, places in venue_groups:
-            st.markdown(f"**{label}**")
-            if places:
-                st.dataframe(
-                    pd.DataFrame(
-                        [
-                            {
-                                "Name": place["name"],
-                                "Rating": place.get("rating"),
-                                "Address": place.get("address", ""),
-                            }
-                            for place in places
-                        ]
-                    ),
-                    hide_index=True,
-                    width="stretch",
-                )
+        for key, label in categories:
+            st.markdown(f"#### {label}")
+            places = amenities.get(key, [])
+            if not places:
+                st.info(f"No {key.replace('_', ' ')} found nearby.")
             else:
-                st.caption(f"No {label.lower()} found nearby.")
+                df_places = pd.DataFrame([
+                    {
+                        "Name": p.get("name", "Unknown"),
+                        "Rating": f"⭐ {p.get('rating')}" if p.get("rating") else "N/A",
+                        "Address": p.get("address", "N/A")
+                    }
+                    for p in places
+                ])
+                st.dataframe(df_places, hide_index=True, use_container_width=True)
 
 def main() -> None:
     render_hero()
