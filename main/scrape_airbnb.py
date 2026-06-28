@@ -137,7 +137,15 @@ def scrape_airbnb_listings(
     detected_symbol = "£"
 
     try:
-        service = Service(ChromeDriverManager().install())
+        # Set paths dynamically based on environment
+        if shutil.which("chromium"):
+            print("[airbnb] Chromium found on system path (Streamlit environment).")
+            chrome_options.binary_location = "/usr/bin/chromium"
+            service = Service("/usr/bin/chromedriver")
+        else:
+            print("[airbnb] Chromium not found. Falling back to ChromeDriverManager (Local).")
+            service = Service(ChromeDriverManager().install())
+
         driver = webdriver.Chrome(service=service, options=chrome_options)
 
         print(f"[airbnb] Navigating to: {url}")
