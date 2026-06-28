@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent
 load_dotenv(ROOT_DIR / ".env")
 
-# Also load a shared env file one level up (team often keeps keys outside main/).
 _parent_env = ROOT_DIR.parent / "env"
 if _parent_env.is_file():
     load_dotenv(_parent_env, override=False)
 
+# Inject Streamlit secrets into os.environ so os.getenv() calls below work on Cloud
+try:
+    import streamlit as st
+    for _key, _val in st.secrets.items():
+        if isinstance(_val, str):
+            os.environ.setdefault(_key, _val)
+except Exception:
+    pass
+
 _PLACEHOLDER_HINTS = ("your_", "example", "replace", "changeme", "paste", "insert")
+
 
 
 def usable_api_key(raw: str | None) -> str:
