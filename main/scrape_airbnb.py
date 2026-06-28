@@ -185,6 +185,12 @@ def scrape_airbnb_listings(
 
         for idx, card in enumerate(cards[:limit]):
             try:
+                # 🌟 CRITICAL FIX FOR HEADLESS CLOUD VIRTUALIZATION:
+                # Scroll this specific card into the center of the viewport 
+                # so Airbnb is forced to render its text, price, and inner elements.
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+                time.sleep(1)  # Give it a brief moment to paint the text strings
+
                 card_text = card.text
                 lines = [l.strip() for l in card_text.splitlines() if l.strip()]
 
