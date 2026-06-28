@@ -385,11 +385,18 @@ def main() -> None:
             st.info(f"Showing results for flights from **{st.session_state['search_origin']}**. Re-search to update for **{origin}**.")
 
     if not results:
-        st.info("Set your preferences in the sidebar, then click **Find destinations**.")
-        st.markdown(
-            "We rank **tropical destinations** discovered via Google Places using live weather, "
-            "nearby bars and clubs, and **web-scraped** trip costs (Numbeo + Cheapflights)."
-        )
+        if find_clicked:
+            st.warning(
+                "No destinations found matching your current filters. "
+                "Try loosening them — for example, lower the minimum temperature, "
+                "increase the budget, or reduce the minimum nightlife venues."
+            )
+        else:
+            st.info("Set your preferences in the sidebar, then click **Find destinations**.")
+            st.markdown(
+                "We rank **tropical destinations** discovered via Google Places using live weather, "
+                "nearby bars and clubs, and **web-scraped** trip costs (Numbeo + Cheapflights)."
+            )
         return
 
     render_summary_box(summary)
