@@ -156,6 +156,12 @@ def render_forecast_chart(dest: dict) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def airbnb_listing_has_details(listing: dict) -> bool:
+    name = (listing.get("name") or "").strip().lower()
+    has_name = bool(name and name not in {"unknown", "unknown listing"})
+    return has_name and bool(listing.get("listing_url")) and listing.get("price_nightly") is not None
+
+
 def render_destination_detail(dest: dict) -> None:
     st.markdown(f'<p class="section-title">{dest["name"]}</p>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
@@ -272,8 +278,8 @@ def render_destination_detail(dest: dict) -> None:
     with tab3:
         c = dest["costs"]
         st.dataframe(pd.DataFrame({
-            "Item": ["Return flight", "Hotel per night", "Airbnb per night", "Meal cost index"],
-            "USD": [c["flight_usd"], c["hotel_nightly_usd"], c["airbnb_nightly_usd"], c["meal_index"]],
+            "Item": ["Return flight", "Hotel per night", "Meal cost index"],
+            "USD": [c["flight_usd"], c["hotel_nightly_usd"], c["meal_index"]],
         }), hide_index=True, width="stretch")
         st.caption(
             f"Estimated 7-night total: ${c['total_7_night_usd']:,.2f} "
@@ -285,13 +291,14 @@ def render_destination_detail(dest: dict) -> None:
 
 
     with tab4:
-        if listings:
-            sym = listings[0].get("currency_symbol", "£")
-            valid_prices = [r["price_nightly"] for r in listings if r["price_nightly"]]
+        detailed_listings = [listing for listing in listings if airbnb_listing_has_details(listing)]
+        if detailed_listings:
+            sym = detailed_listings[0].get("currency_symbol", "£")
+            valid_prices = [r["price_nightly"] for r in detailed_listings if r["price_nightly"]]
             avg = round(sum(valid_prices) / len(valid_prices), 2) if valid_prices else 0
-            st.caption(f"{len(listings)} listings · avg {sym}{avg}/night")
+            st.caption(f"{len(detailed_listings)} listings found - avg {sym}{avg}/night")
 
-            for listing in listings:
+            for listing in detailed_listings:
                 img_col, info_col = st.columns([1, 3])
                 with img_col:
                     if listing.get("image_url"):

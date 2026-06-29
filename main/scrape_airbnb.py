@@ -20,6 +20,19 @@ from database import get_airbnb_listings, get_session, save_airbnb_listings
 AIRBNB_CACHE_HOURS = 24
 
 
+def _listing_has_details(listing: dict) -> bool:
+    name = (listing.get("name") or "").strip().lower()
+    has_name = bool(name and name not in {"unknown", "unknown listing"})
+    return has_name and bool(listing.get("listing_url")) and listing.get("price_nightly") is not None
+
+
+def _cached_listings_are_usable(listings: list[dict]) -> bool:
+    if not listings:
+        return False
+    detailed_count = sum(1 for listing in listings if _listing_has_details(listing))
+    return detailed_count >= min(4, len(listings))
+
+
 def _get_listing_coords(
     driver: webdriver.Chrome,
     listing_url: str,
@@ -101,11 +114,13 @@ def scrape_airbnb_listings(
     db = get_session()
     try:
         cached = get_airbnb_listings(db, dest_id, max_age_hours=AIRBNB_CACHE_HOURS)
-        if cached:
+        if _cached_listings_are_usable(cached):
             print(f"[airbnb] Returning {len(cached)} cached listings for '{dest_id}'.")
             prices = [r["price_nightly"] for r in cached if r["price_nightly"]]
             avg = round(sum(prices) / len(prices), 2) if prices else None
             return avg, cached
+        if cached:
+            print(f"[airbnb] Ignoring incomplete cached listings for '{dest_id}'.")
     finally:
         db.close()
 
@@ -195,7 +210,38 @@ def scrape_airbnb_listings(
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
                 time.sleep(1)  # Give it a brief moment to paint the text strings
 
-                card_text = card.text
+                dom_data = driver.execute_script(
+                    """
+                    const card = arguments[0];
+                    const textBits = [
+                        card.innerText || "",
+                        card.textContent || "",
+                        card.getAttribute("aria-label") || "",
+                    ];
+                    const attrBits = Array.from(card.querySelectorAll("[aria-label], [title], img[alt]"))
+                        .flatMap((el) => [
+                            el.getAttribute("aria-label") || "",
+                            el.getAttribute("title") || "",
+                            el.getAttribute("alt") || "",
+                        ]);
+                    const links = Array.from(card.querySelectorAll('a[href*="/rooms/"]'))
+                        .map((a) => a.href || a.getAttribute("href") || "")
+                        .filter(Boolean);
+                    const images = Array.from(card.querySelectorAll("img"))
+                        .map((img) => ({
+                            src: img.currentSrc || img.src || img.getAttribute("src") || "",
+                            alt: img.getAttribute("alt") || "",
+                        }))
+                        .filter((img) => img.src || img.alt);
+                    return { text: textBits.concat(attrBits).filter(Boolean).join("\\n"), links, images };
+                    """,
+                    card,
+                )
+
+                card_text = "\n".join(
+                    part for part in [card.text, (dom_data or {}).get("text", "")]
+                    if part
+                )
                 lines = [l.strip() for l in card_text.splitlines() if l.strip()]
 
                 print(f"\n[airbnb] --- Card {idx + 1} ---")
@@ -215,6 +261,12 @@ def scrape_airbnb_listings(
                             and "guest" not in line.lower()
                         ):
                             title = line
+                            break
+                if title == "Unknown Listing":
+                    for image in (dom_data or {}).get("images", []):
+                        alt = (image.get("alt") or "").strip()
+                        if len(alt) > 8 and "image" not in alt.lower():
+                            title = alt
                             break
 
                 # Description
@@ -273,9 +325,14 @@ def scrape_airbnb_listings(
                 image_url = None
                 try:
                     img_elem = card.find_element(By.CSS_SELECTOR, "img")
-                    image_url = img_elem.get_attribute("src")
+                    image_url = img_elem.get_attribute("currentSrc") or img_elem.get_attribute("src")
                 except Exception:
                     pass
+                if not image_url:
+                    for image in (dom_data or {}).get("images", []):
+                        if image.get("src"):
+                            image_url = image["src"]
+                            break
 
                 # Listing URL
                 listing_url = None
@@ -285,6 +342,10 @@ def scrape_airbnb_listings(
                     listing_url = href if href.startswith("http") else f"https://www.airbnb.com{href}"
                 except Exception:
                     pass
+                if not listing_url:
+                    for href in (dom_data or {}).get("links", []):
+                        listing_url = href if href.startswith("http") else f"https://www.airbnb.com{href}"
+                        break
 
                 print(f"[airbnb] Has URL: {bool(listing_url)} | Has image: {bool(image_url)}")
 
