@@ -158,14 +158,16 @@ def scrape_airbnb_listings(
             )
         )
 
-        # Scroll aggressively to trigger lazy-loading, stop early if enough cards
+        # Scroll aggressively to trigger lazy-loading. Streamlit/headless runs can
+        # leave the first few cards partly empty, so load extras and filter below.
+        desired_card_count = max(limit * 3, limit + 6)
         prev_count = 0
         for _ in range(6):
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
             cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
             print(f"[airbnb] Cards visible so far: {len(cards)}")
-            if len(cards) >= limit:
+            if len(cards) >= desired_card_count:
                 break
             if len(cards) == prev_count:
                 # No new cards — scroll back up then down to re-trigger
@@ -176,158 +178,136 @@ def scrape_airbnb_listings(
             prev_count = len(cards)
 
         cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
-        print(f"[airbnb] Final card count: {len(cards)} (will parse up to {limit})")
+        print(f"[airbnb] Final card count: {len(cards)} (will collect up to {limit})")
 
-    # ── PASS 1: scroll card-by-card, extract immediately while in viewport ──
+            # ── PASS 1: read every card WITHOUT navigating away ────────────────────
+        # Navigating away mid-loop causes Airbnb to rebuild the DOM on return,
+        # which drops all remaining cards. Collect everything first.
         raw_cards: list[dict] = []
-        seen_urls: set[str] = set()
 
-        # Get initial cards
-        cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
-        
-        card_index = 0
-        scroll_attempts = 0
-        max_scroll_attempts = 12
+        for idx, card in enumerate(cards[:desired_card_count]):
+            if len(raw_cards) >= limit:
+                break
+            try:
+                # 🌟 CRITICAL FIX FOR HEADLESS CLOUD VIRTUALIZATION:
+                # Scroll this specific card into the center of the viewport 
+                # so Airbnb is forced to render its text, price, and inner elements.
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+                time.sleep(1)  # Give it a brief moment to paint the text strings
 
-        while len(raw_cards) < limit and scroll_attempts < max_scroll_attempts:
-            cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
-            
-            # Process any new cards we haven't seen yet
-            for card in cards[card_index:]:
-                if len(raw_cards) >= limit:
-                    break
+                card_text = card.text
+                lines = [l.strip() for l in card_text.splitlines() if l.strip()]
 
+                print(f"\n[airbnb] --- Card {idx + 1} ---")
+                print(f"[airbnb] Preview: {card_text[:150]!r}")
+
+                # Title
+                title = "Unknown Listing"
                 try:
-                    # Scroll this specific card into centre of viewport FIRST
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
-                    time.sleep(0.6)  # Let it fully render
-
-                    # Get URL as dedup key
-                    listing_url = None
-                    try:
-                        link_elem = card.find_element(By.CSS_SELECTOR, 'a[href*="/rooms/"]')
-                        href = link_elem.get_attribute("href")
-                        listing_url = href if href.startswith("http") else f"https://www.airbnb.com{href}"
-                    except Exception:
-                        pass
-
-                    if listing_url and listing_url in seen_urls:
-                        continue
-
-                    card_text = card.text
-                    if not card_text or len(card_text.strip()) < 10:
-                        time.sleep(0.5)
-                        card_text = card.text
-                    if not card_text or len(card_text.strip()) < 10:
-                        continue
-
-                    lines = [l.strip() for l in card_text.splitlines() if l.strip()]
-                    if not lines:
-                        continue
-
-                    # Title
-                    title = "Unknown Listing"
-                    try:
-                        title_elem = card.find_element(By.CSS_SELECTOR, '[id^="title_"]')
-                        title = title_elem.text.strip()
-                    except Exception:
-                        for line in lines:
-                            if (
-                                len(line) > 8
-                                and not re.match(r"^[\d.£$€,]", line)
-                                and "favourite" not in line.lower()
-                                and "guest" not in line.lower()
-                            ):
-                                title = line
-                                break
-
-                    # Description
-                    description = None
-                    for i, line in enumerate(lines):
-                        if line == title and i + 1 < len(lines):
-                            candidate = lines[i + 1]
-                            if (
-                                len(candidate) > 10
-                                and not re.match(r"^[\d£$€]", candidate)
-                                and "bedroom" not in candidate.lower()
-                                and "bath" not in candidate.lower()
-                            ):
-                                description = candidate
-                            break
-
-                    # Bedrooms
-                    bed_parts = []
+                    title_elem = card.find_element(By.CSS_SELECTOR, '[id^="title_"]')
+                    title = title_elem.text.strip()
+                except Exception:
                     for line in lines:
-                        if re.search(r"\d+\s*(bedroom|bed|bathroom|studio)", line, re.I):
-                            bed_parts.append(line)
-                        if len(bed_parts) == 2:
+                        if (
+                            len(line) > 8
+                            and not re.match(r"^[\d.£$€,]", line)
+                            and "favourite" not in line.lower()
+                            and "guest" not in line.lower()
+                        ):
+                            title = line
                             break
-                    bedrooms = " · ".join(bed_parts) if bed_parts else None
 
-                    # Price
-                    price_val = None
-                    all_prices = re.findall(r"([£$€])([\d,]+)", card_text)
-                    if all_prices:
-                        detected_symbol = all_prices[0][0]
-                        price_val = float(all_prices[0][1].replace(",", ""))
-                    else:
-                        m = re.search(r"(\d{2,4})\s*(?:per night|/night)", card_text, re.I)
-                        if m:
-                            price_val = float(m.group(1))
+                # Description
+                description = None
+                for i, line in enumerate(lines):
+                    if line == title and i + 1 < len(lines):
+                        candidate = lines[i + 1]
+                        if (
+                            len(candidate) > 10
+                            and not re.match(r"^[\d£$€]", candidate)
+                            and "bedroom" not in candidate.lower()
+                            and "bath" not in candidate.lower()
+                        ):
+                            description = candidate
+                        break
 
-                    if title == "Unknown Listing" and not price_val:
-                        continue
+                # Bedrooms
+                bed_parts = []
+                for line in lines:
+                    if re.search(r"\d+\s*(bedroom|bed|bathroom|studio)", line, re.I):
+                        bed_parts.append(line)
+                    if len(bed_parts) == 2:
+                        break
+                bedrooms = " · ".join(bed_parts) if bed_parts else None
 
-                    # Rating
-                    rating = None
-                    m = re.search(r"(\d\.\d+)\s*out of 5", card_text)
+                # Price — try multiple patterns
+                price_val = None
+                all_prices = re.findall(r"([£$€])([\d,]+)", card_text)
+                print(f"[airbnb] All price matches: {all_prices}")
+                if all_prices:
+                    detected_symbol = all_prices[0][0]
+                    price_val = float(all_prices[0][1].replace(",", ""))
+                else:
+                    # fallback: plain number followed by "per night" or "/night"
+                    m = re.search(r"(\d{2,4})\s*(?:per night|/night)", card_text, re.I)
                     if m:
-                        rating = float(m.group(1))
-                    else:
-                        m2 = re.search(r"(\d\.\d+)\s*\(\d+\)", card_text)
-                        if m2:
-                            rating = float(m2.group(1))
+                        price_val = float(m.group(1))
 
-                    # Image
-                    image_url = None
-                    try:
-                        img_elem = card.find_element(By.CSS_SELECTOR, "img")
-                        image_url = img_elem.get_attribute("src")
-                    except Exception:
-                        pass
+                print(f"[airbnb] Title: {title!r} | Price: {price_val} | Bedrooms: {bedrooms!r}")
 
-                    if not listing_url:
-                        listing_url = f"https://www.airbnb.com/rooms/unknown_{random.randint(10000,99999)}"
-
-                    seen_urls.add(listing_url)
-                    print(f"[airbnb] Parsed {len(raw_cards)+1}: {title} → {price_val}")
-
-                    raw_cards.append({
-                        "name": title,
-                        "description": description,
-                        "bedrooms": bedrooms,
-                        "price_nightly": price_val,
-                        "currency_symbol": detected_symbol,
-                        "rating": rating,
-                        "image_url": image_url,
-                        "listing_url": listing_url,
-                    })
-                    if price_val:
-                        prices.append(price_val)
-
-                    card_index += 1
-
-                except Exception as e:
-                    print(f"[airbnb] Card skip: {e}")
-                    card_index += 1
+                if title == "Unknown Listing" and price_val is None:
+                    print(f"[airbnb] Card {idx + 1} skipped: placeholder/no usable listing data")
                     continue
 
-            scroll_attempts += 1
-            driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(1.5)
-            print(f"[airbnb] Scroll {scroll_attempts}, collected {len(raw_cards)}/{limit}")
+                # Rating
+                rating = None
+                m = re.search(r"(\d\.\d+)\s*out of 5", card_text)
+                if m:
+                    rating = float(m.group(1))
+                else:
+                    m2 = re.search(r"(\d\.\d+)\s*\(\d+\)", card_text)
+                    if m2:
+                        rating = float(m2.group(1))
 
-        print(f"\n[airbnb] Pass 1 done: {len(raw_cards)} cards, {len(prices)} with prices.")
+                # Image
+                image_url = None
+                try:
+                    img_elem = card.find_element(By.CSS_SELECTOR, "img")
+                    image_url = img_elem.get_attribute("src")
+                except Exception:
+                    pass
+
+                # Listing URL
+                listing_url = None
+                try:
+                    link_elem = card.find_element(By.CSS_SELECTOR, 'a[href*="/rooms/"]')
+                    href = link_elem.get_attribute("href")
+                    listing_url = href if href.startswith("http") else f"https://www.airbnb.com{href}"
+                except Exception:
+                    pass
+
+                print(f"[airbnb] Has URL: {bool(listing_url)} | Has image: {bool(image_url)}")
+
+                # Keep card even if no price — we still want it on the map
+                raw_cards.append({
+                    "name": title,
+                    "description": description,
+                    "bedrooms": bedrooms,
+                    "price_nightly": price_val,
+                    "currency_symbol": detected_symbol,
+                    "rating": rating,
+                    "image_url": image_url,
+                    "listing_url": listing_url,
+                })
+                if price_val:
+                    prices.append(price_val)
+
+            except Exception as e:
+                print(f"[airbnb] Card {idx + 1} failed: {e}")
+                continue
+
+        print(f"\n[airbnb] Pass 1 done: {len(raw_cards)} cards collected, "
+              f"{len(prices)} with prices.")
 
         # ── PASS 2: coordinates via geocoding only (no page navigation) ──────────
         for item in raw_cards:

@@ -15,6 +15,8 @@ from bs4 import BeautifulSoup
 from settings import COST_CACHE_TTL, GBP_TO_USD, ORIGIN_AIRPORT
 from database import cache_costs, get_cached_costs, get_session
 
+NUMBEO_429_CACHE_TTL = 6 * 60 * 60
+
 
 @dataclass
 class CostEstimate:
@@ -138,7 +140,7 @@ class CostScraperService:
         db = get_session()
         try:
             cached = get_cached_costs(db, cache_id)
-            if cached and self._row_is_fresh(cached):
+            if cached and self._row_can_be_used(cached):
                 estimate = self._from_row(cached)
                 estimate.destination_id = destination_id
                 estimate.scrape_sources = {
@@ -147,8 +149,7 @@ class CostScraperService:
                 }
                 return estimate
 
-            numbeo_slug = self._resolve_numbeo_slug(destination_id, city_name, country)
-            numbeo = self._scrape_numbeo(numbeo_slug) if numbeo_slug else {}
+            numbeo = self._scrape_numbeo_for_destination(destination_id, city_name, country)
 
             flight_slug = self._resolve_cheapflights_slug(city_name, country)
             flight_usd, flight_source = self._resolve_flight_price(flight_slug, airport_code)
@@ -158,7 +159,10 @@ class CostScraperService:
                 {"flight": 700, "hotel": 70, "airbnb": 50, "meal": 35},
             )
 
-            scrape_sources: dict[str, str] = {"origin": self.origin}
+            scrape_sources: dict[str, str] = {
+                "origin": self.origin,
+                "numbeo": numbeo.get("source", "numbeo-no-page"),
+            }
 
             if flight_usd is not None:
                 scrape_sources["flight"] = flight_source
@@ -222,6 +226,10 @@ class CostScraperService:
             db.close()
 
     def _resolve_numbeo_slug(self, destination_id: str, city_name: str, country: str) -> str | None:
+        candidates = self._numbeo_slug_candidates(destination_id, city_name, country)
+        return candidates[0] if candidates else None
+
+    def _numbeo_slug_candidates(self, destination_id: str, city_name: str, country: str) -> list[str]:
         candidates: list[str] = []
 
         if destination_id in NUMBEO_SLUGS:
@@ -241,29 +249,35 @@ class CostScraperService:
             if country in NUMBEO_COUNTRY_FALLBACKS:
                 candidates.append(NUMBEO_COUNTRY_FALLBACKS[country])
 
+        cleaned: list[str] = []
         seen: set[str] = set()
         for slug in candidates:
             slug = slug.strip("-")
             if not slug or slug.lower() in seen:
                 continue
             seen.add(slug.lower())
-            if self._numbeo_page_exists(slug):
-                return slug
-        return None
+            cleaned.append(slug)
+        return cleaned
 
-    def _numbeo_page_exists(self, slug: str) -> bool:
-        try:
-            resp = self.session.get(
-                f"{self.NUMBEO_BASE}/{quote(slug)}",
-                params={"displayCurrency": "USD"},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                return False
-            title = BeautifulSoup(resp.text, "lxml").find("title")
-            return bool(title and "Cost of Living" in title.get_text())
-        except requests.RequestException:
-            return False
+    def _scrape_numbeo_for_destination(self, destination_id: str, city_name: str, country: str) -> dict[str, Any]:
+        candidates = self._numbeo_slug_candidates(destination_id, city_name, country)
+        if not candidates:
+            return {"source": "numbeo-no-page"}
+
+        # Known slugs are curated, so use one request instead of page-exists probes.
+        if destination_id in NUMBEO_SLUGS:
+            return self._scrape_numbeo(candidates[0])
+
+        last_result: dict[str, Any] = {"source": "numbeo-no-page"}
+        for slug in candidates[:3]:
+            result = self._scrape_numbeo(slug)
+            source = result.get("source", "")
+            if result.get("meal_inexpensive") is not None or result.get("rent_monthly_usd") is not None:
+                return result
+            if "429" in source:
+                return result
+            last_result = result
+        return last_result
 
     def _scrape_numbeo(self, slug: str) -> dict[str, Any]:
         url = f"{self.NUMBEO_BASE}/{quote(slug)}"
@@ -291,7 +305,7 @@ class CostScraperService:
 
                 if "meal" in label and "inexpensive" in label:
                     meal_inexpensive = value
-                elif "1 bedroom apartment" in label and "city centre" in label:
+                elif "apartment" in label and "1 bedroom" in label and "city centre" in label:
                     rent_monthly = value
 
             cheap = meal_inexpensive is not None and meal_inexpensive < 15
@@ -426,13 +440,52 @@ class CostScraperService:
     def _row_is_fresh(row: Any) -> bool:
         from datetime import datetime, timezone
 
+        return CostScraperService._row_age_seconds(row) < COST_CACHE_TTL
+
+    @staticmethod
+    def _row_age_seconds(row: Any) -> float:
+        from datetime import datetime, timezone
+
         if not row.fetched_at:
-            return False
+            return float("inf")
         ts = row.fetched_at
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - ts).total_seconds()
-        return age < COST_CACHE_TTL
+        return (datetime.now(timezone.utc) - ts).total_seconds()
+
+    @staticmethod
+    def _row_can_be_used(row: Any) -> bool:
+        if not CostScraperService._row_is_fresh(row):
+            return False
+        if CostScraperService._row_has_numbeo_429(row):
+            return CostScraperService._row_age_seconds(row) < NUMBEO_429_CACHE_TTL
+        return CostScraperService._row_has_numbeo_attempt(row)
+
+    @staticmethod
+    def _row_has_numbeo_429(row: Any) -> bool:
+        raw_details = getattr(row, "source_details", None)
+        if raw_details:
+            try:
+                loaded = json.loads(raw_details)
+                if isinstance(loaded, dict) and "429" in str(loaded.get("numbeo", "")).lower():
+                    return True
+            except (TypeError, json.JSONDecodeError):
+                pass
+        return "429" in (row.source or "").lower()
+
+    @staticmethod
+    def _row_has_numbeo_attempt(row: Any) -> bool:
+        raw_details = getattr(row, "source_details", None)
+        if raw_details:
+            try:
+                loaded = json.loads(raw_details)
+                if isinstance(loaded, dict) and "numbeo" in loaded:
+                    return "429" not in str(loaded.get("numbeo", "")).lower()
+            except (TypeError, json.JSONDecodeError):
+                pass
+
+        source = (row.source or "").lower()
+        return "numbeo" in source and "429" not in source
 
     @staticmethod
     def _from_row(row: Any) -> CostEstimate:

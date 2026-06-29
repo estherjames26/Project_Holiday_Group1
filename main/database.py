@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    case,
     create_engine,
     inspect,
 )
@@ -148,7 +149,11 @@ def get_airbnb_listings(
             AirbnbListing.destination_id == destination_id,
             AirbnbListing.scraped_at >= cutoff,
         )
-        .order_by(AirbnbListing.price_nightly)
+        .order_by(
+            case((AirbnbListing.price_nightly.is_(None), 1), else_=0),
+            AirbnbListing.price_nightly,
+            AirbnbListing.id,
+        )
         .all()
     )
     return [
