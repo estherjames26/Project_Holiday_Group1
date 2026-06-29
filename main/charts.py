@@ -1,4 +1,8 @@
-# Plotly charts for comparing destinations.
+"""Plotly chart builders for comparing destination results.
+
+Each function accepts ranked destination dictionaries from the recommendation
+engine and returns a Plotly figure for Streamlit to display.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ import plotly.graph_objects as go
 
 
 def build_radar_chart(destinations: list[dict[str, Any]], selected_ids: list[str] | None = None) -> go.Figure:
+    """Build a radar chart of weather, cost, nightlife, and adventure scores."""
     criteria = ["Weather", "Cost", "Nightlife", "Adventure"]
     fig = go.Figure()
 
@@ -44,6 +49,7 @@ def build_radar_chart(destinations: list[dict[str, Any]], selected_ids: list[str
 
 
 def build_decision_matrix(destinations: list[dict[str, Any]]) -> go.Figure:
+    """Build a heatmap-style decision matrix for destination scores."""
     if not destinations:
         return go.Figure()
 
@@ -72,6 +78,7 @@ def build_decision_matrix(destinations: list[dict[str, Any]]) -> go.Figure:
 
 
 def build_bubble_chart(destinations: list[dict[str, Any]]) -> go.Figure:
+    """Build a cost-vs-score bubble chart sized by nightlife venues."""
     df = pd.DataFrame([
         {
             "Destination": d["name"],
@@ -98,6 +105,7 @@ def build_bubble_chart(destinations: list[dict[str, Any]]) -> go.Figure:
 
 
 def build_amenity_breakdown_chart(dest: dict[str, Any]) -> go.Figure:
+    """Build a donut chart showing bars, restaurants, and nightclubs."""
     a = dest["amenities"]
     labels = ["Bars", "Restaurants", "Nightclubs"]
     values = [len(a["bars"]), len(a["restaurants"]), len(a["night_clubs"])]

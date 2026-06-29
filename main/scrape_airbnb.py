@@ -1,3 +1,10 @@
+"""Airbnb listing scraper and listing cache integration.
+
+The scraper first checks the database cache, then uses headless Selenium to
+collect listing cards. Coordinates come from Google geocoding with jittered
+fallbacks so listings can be shown on destination maps.
+"""
+
 from __future__ import annotations
 
 import re
@@ -13,8 +20,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-import requests  # add this at the top with other imports
-from settings import GOOGLE_MAPS_API_KEY  # add this too
+import requests
+from settings import GOOGLE_MAPS_API_KEY
 from database import get_airbnb_listings, get_session, save_airbnb_listings
 
 AIRBNB_CACHE_HOURS = 24
@@ -27,8 +34,11 @@ def _get_listing_coords(
     fallback_lng: float,
 ) -> tuple[float, float] | None:
     """
-    Tries to pull lat/lng from Airbnb's __NEXT_DATA__ blob.
-    Returns None if not found (caller handles fallback).
+    Try to pull lat/lng from Airbnb's __NEXT_DATA__ blob.
+
+    Inputs are the Selenium driver, listing URL, and fallback coordinates kept
+    for callers. Returns a coordinate pair, or None when the page has no usable
+    location data.
     """
     try:
         driver.get(listing_url)
@@ -54,8 +64,11 @@ def _get_listing_coords(
 
 def _geocode_name(name: str, city: str, country: str) -> tuple[float, float] | None:
     """
-    Uses Google Geocoding to find the city centre, then adds jitter so
-    multiple listings don't all stack on the same point.
+    Geocode the destination city and add jitter for map display.
+
+    Listing names are often vague, so the city/country is used as the stable
+    input. Returns None when no Google Maps key is configured or the request
+    fails.
     """
     if not GOOGLE_MAPS_API_KEY:
         return None
@@ -90,13 +103,17 @@ def scrape_airbnb_listings(
     dest_lng: float = 0.0,
 ) -> tuple[float | None, list[dict]]:
     """
-    Returns (average_nightly_price, list_of_listing_dicts).
+    Scrape Airbnb listings for a destination.
 
-    Pass 1: collect all card data WITHOUT navigating away (so cards stay in DOM).
-    Pass 2: visit each listing URL to get coordinates.
+    Inputs are city/country labels, an optional destination id, result limit,
+    and destination coordinates for fallback pin placement. Returns
+    `(average_nightly_price, listings)`. Cached database rows are reused for 24
+    hours; otherwise Selenium collects cards, estimates coordinates, and saves
+    the fresh rows.
     """
     dest_id = destination_id or re.sub(r"[^a-z0-9]+", "-", city_name.lower()).strip("-")
 
+    # Prefer recent cached listings because Selenium scraping is slow and fragile.
     # ── 1. Try DB cache ────────────────────────────────────────────────────────
     db = get_session()
     try:
@@ -110,6 +127,7 @@ def scrape_airbnb_listings(
         db.close()
 
     # ── 2. Scrape Airbnb ───────────────────────────────────────────────────────
+    # Live scraping runs only after the cache misses or expires.
     query = quote(f"{city_name}, {country}")
     url = f"https://www.airbnb.com/s/{query}/homes"
 
@@ -315,6 +333,7 @@ def scrape_airbnb_listings(
             if result:
                 lat, lng = result
             else:
+                # Final fallback keeps map pins near the destination instead of at 0,0.
                 lat = dest_lat + random.uniform(-0.02, 0.02)
                 lng = dest_lng + random.uniform(-0.02, 0.02)
                 print(f"[coords] Jitter fallback for '{item['name']}'")
@@ -336,6 +355,7 @@ def scrape_airbnb_listings(
                 pass
 
     # ── 3. Persist to DB ───────────────────────────────────────────────────────
+    # Save successful scrape results so the next app rerun can use the cache.
     if listings_data:
         db = get_session()
         try:

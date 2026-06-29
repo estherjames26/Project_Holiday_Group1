@@ -1,5 +1,9 @@
-# Home page for the Holiday Planner app.
-# Run locally: streamlit run app.py
+"""Streamlit home page for the Holiday Planner app.
+
+This file wires the sidebar inputs, recommendation engine, maps, charts,
+Airbnb listings, and downloadable results into one user-facing workflow.
+Run locally with: streamlit run app.py
+"""
 
 from __future__ import annotations
 
@@ -48,10 +52,12 @@ inject_styles()
 
 @st.cache_resource
 def get_engine() -> RecommendationEngine:
+    """Create the recommendation engine once and reuse it across Streamlit reruns."""
     return RecommendationEngine()
 
 
 def render_sidebar() -> tuple[UserPreferences, str, int, bool]:
+    """Render trip controls and return preferences, origin airport, result count, and validity."""
     st.sidebar.header("Your trip preferences")
 
     preset = st.sidebar.selectbox("Quick preset", ["Custom"] + list(PRESETS.keys()))
@@ -115,6 +121,7 @@ def render_sidebar() -> tuple[UserPreferences, str, int, bool]:
 
 
 def export_results_csv(results: list[dict]) -> bytes:
+    """Convert ranked destination results into CSV bytes for the download button."""
     rows = []
     for i, d in enumerate(results):
         rows.append({
@@ -131,6 +138,7 @@ def export_results_csv(results: list[dict]) -> bytes:
 
 
 def render_insight_cards(dest: dict) -> None:
+    """Show concise pros and cons for one destination."""
     insights = dest.get("insights") or generate_destination_insights(dest, [dest])
     st.caption(insights["verdict"])
     c1, c2 = st.columns(2)
@@ -145,6 +153,7 @@ def render_insight_cards(dest: dict) -> None:
 
 
 def render_forecast_chart(dest: dict) -> None:
+    """Render the 5-day temperature forecast if weather data includes daily rows."""
     forecast = dest["weather"].get("forecast_days", [])
     if not forecast:
         return
@@ -157,6 +166,7 @@ def render_forecast_chart(dest: dict) -> None:
 
 
 def render_destination_detail(dest: dict) -> None:
+    """Render the detail tabs for one selected destination."""
     st.markdown(f'<p class="section-title">{dest["name"]}</p>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Score", f"{dest['score']}/100")
@@ -181,7 +191,7 @@ def render_destination_detail(dest: dict) -> None:
     render_insight_cards(dest)
     st.write(dest["description"])
 
-    # Fetch Airbnb listings early so they can be placed on the main map
+    # Fetch listings before the map so Airbnb pins can share the same view.
     dest_id = dest["id"]
     db = get_session()
     try:
@@ -212,14 +222,14 @@ def render_destination_detail(dest: dict) -> None:
             import folium
             m = folium.Map(location=[dest["latitude"], dest["longitude"]], zoom_start=13, tiles="CartoDB positron")
             
-            # Destination center marker
+            # Mark the destination centre before adding venues around it.
             folium.Marker(
                 location=[dest["latitude"], dest["longitude"]],
                 popup=dest["name"],
                 icon=folium.Icon(color="blue", icon="info-sign")
             ).add_to(m)
             
-            # Add Venues to the map
+            # Venue markers come from Google Places or the app's demo fallback data.
             for b in dest["amenities"]["bars"]:
                 folium.Marker(
                     location=[b["latitude"], b["longitude"]],
@@ -239,7 +249,7 @@ def render_destination_detail(dest: dict) -> None:
                     icon=folium.Icon(color="purple", icon="music", prefix="fa")
                 ).add_to(m)
                 
-            # Add Airbnb listings as red pins to the same venue map
+            # Cached or scraped Airbnb listings are shown as red pins.
             if listings:
                 sym = listings[0].get("currency_symbol", "£")
                 for l in listings:
@@ -344,6 +354,7 @@ def render_destination_detail(dest: dict) -> None:
                 st.dataframe(df_places, hide_index=True, use_container_width=True)
 
 def main() -> None:
+    """Run the Streamlit app and coordinate search state across reruns."""
     render_hero()
     prefs, origin, top_n, origin_valid = render_sidebar()
     render_status_pills(bool(OPENWEATHER_API_KEY), bool(GOOGLE_MAPS_API_KEY), bool(OPENAI_API_KEY), origin)
@@ -361,6 +372,7 @@ def main() -> None:
         with st.spinner(f"Fetching weather and venue data (flights from {origin})..."):
             engine = get_engine()
             results, summary, portfolio = engine.recommend(prefs, origin, top_n)
+            # Store search outputs in session state so tabs/widgets do not erase results.
             st.session_state["results"] = results
             st.session_state["summary"] = summary
             st.session_state["portfolio"] = portfolio

@@ -1,4 +1,8 @@
-# Sidebar presets (Party focus, Budget trip, etc.) and weight allocation.
+"""Sidebar helpers for presets, scoring weights, and departure airport input.
+
+The app uses these functions to keep Streamlit widget state tidy and to turn
+sidebar controls into normalized ranking inputs.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +49,7 @@ def apply_preset_sidebar_state(preset_name: str) -> None:
     if preset_name == st.session_state.get("_sidebar_preset"):
         return
     st.session_state["_sidebar_preset"] = preset_name
+    # Drop old widget values so the newly selected preset can populate defaults.
     for key in (
         "sidebar_min_temp",
         "sidebar_max_temp",
@@ -90,6 +95,7 @@ def normalize_weights(w_w: float, w_c: float, w_n: float, w_a: float) -> tuple[f
 
 
 def _preset_point_defaults(preset_prefs: UserPreferences | None) -> tuple[int, int, int, int]:
+    """Convert preset weights into whole-number slider points that total 100."""
     prefs = preset_prefs or UserPreferences()
     raw = [
         int(round(prefs.weather_weight * TOTAL_SCORE_POINTS)),
@@ -122,7 +128,9 @@ def _point_slider(label: str, max_points: int, default: int, key: str) -> int:
 
 
 def _reset_weight_sliders_if_preset_changed(preset_name: str) -> None:
+    """Clear weight sliders when switching presets so defaults apply cleanly."""
     if preset_name != st.session_state.get("_weight_preset"):
+        # Weight sliders are coupled, so stale values could hide preset defaults.
         for key in ("score_weight_weather", "score_weight_cost", "score_weight_nightlife"):
             st.session_state.pop(key, None)
         st.session_state["_weight_preset"] = preset_name

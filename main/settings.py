@@ -1,5 +1,12 @@
 # API keys and app settings — loaded from .env in this folder.
 # Other files import from here so keys aren't scattered everywhere.
+"""Central settings and API-key loading for the Holiday Planner app.
+
+Values are loaded from `main/.env`, optional parent env files, Streamlit
+secrets, and environment variables. Other modules import settings from here
+so credentials and cache TTLs stay in one place.
+"""
+
 from __future__ import annotations
 
 import os
@@ -13,7 +20,7 @@ _parent_env = ROOT_DIR.parent / "env"
 if _parent_env.is_file():
     load_dotenv(_parent_env, override=False)
 
-# Inject Streamlit secrets into os.environ so os.getenv() calls below work on Cloud
+# Inject Streamlit secrets into os.environ so os.getenv() calls below work on Cloud.
 try:
     import streamlit as st
     for _key, _val in st.secrets.items():
@@ -27,7 +34,7 @@ _PLACEHOLDER_HINTS = ("your_", "example", "replace", "changeme", "paste", "inser
 
 
 def usable_api_key(raw: str | None) -> str:
-    """Treat placeholder text like 'your_api_key' as missing."""
+    """Return a real API key, treating placeholder text as missing."""
     key = (raw or "").strip()
     if not key:
         return ""
@@ -67,6 +74,7 @@ GBP_TO_USD = float(os.getenv("GBP_TO_USD", "1.27"))
 
 _db_url = os.getenv("DATABASE_URL", "sqlite:///data/holiday_planner.db")
 if _db_url.startswith("sqlite:///"):
+    # Keep relative SQLite paths anchored inside the app folder.
     _rel = _db_url.replace("sqlite:///", "")
     DATABASE_PATH = ROOT_DIR / _rel if not os.path.isabs(_rel) else Path(_rel)
 else:

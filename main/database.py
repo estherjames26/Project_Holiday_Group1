@@ -1,6 +1,12 @@
 # SQLite database — caches API results and logs past searches.
 # File lives at data/holiday_planner.db and is created on first run.
 
+"""SQLite models, cache helpers, and search history logging.
+
+The app stores API responses, scraped prices, Airbnb listings, discovered
+destinations, and recommendation history in one local SQLite database.
+"""
+
 from __future__ import annotations
 
 import json
@@ -39,6 +45,7 @@ MOCK_VENUE_NAMES = {
 
 
 def is_mock_places_payload(data: dict[str, Any]) -> bool:
+    """Detect old demo Google Places payloads so live API data can replace them."""
     for key in ("bar", "restaurant", "night_club"):
         for place in data.get(key, []):
             name = place.get("name", "")
@@ -48,12 +55,15 @@ def is_mock_places_payload(data: dict[str, Any]) -> bool:
 
 
 def is_mock_weather_payload(data: dict[str, Any]) -> bool:
+    """Detect old demo weather payloads so real OpenWeather data can replace them."""
     if data.get("country") == "XX":
         return True
     current = data.get("current", {})
     return "sys" not in current and "weather" in current
 
 class Base(DeclarativeBase):
+    """Base class for SQLAlchemy ORM models."""
+
     pass
 
 
@@ -92,6 +102,8 @@ class CostCache(Base):
     fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class AirbnbListing(Base):
+    """Cached Airbnb listing cards for one destination."""
+
     __tablename__ = "airbnb_listings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -199,6 +211,7 @@ SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
+    """Create database tables, apply small migrations, and clear stale mock cache."""
     Base.metadata.create_all(_engine)
     _ensure_schema_migrations()
     purge_mock_api_cache()
@@ -210,6 +223,7 @@ def _ensure_schema_migrations() -> None:
     if inspector.has_table("cost_cache"):
         columns = {col["name"] for col in inspector.get_columns("cost_cache")}
         if "source_details" not in columns:
+            # Older databases did not track per-source scrape details.
             with _engine.begin() as conn:
                 conn.exec_driver_sql("ALTER TABLE cost_cache ADD COLUMN source_details TEXT")
 
@@ -217,16 +231,19 @@ def _ensure_schema_migrations() -> None:
         columns = {col["name"] for col in inspector.get_columns("airbnb_listings")}
         with _engine.begin() as conn:
             if "latitude" not in columns:
+                # Coordinates were added later so Airbnb pins can appear on maps.
                 conn.exec_driver_sql("ALTER TABLE airbnb_listings ADD COLUMN latitude FLOAT")
             if "longitude" not in columns:
                 conn.exec_driver_sql("ALTER TABLE airbnb_listings ADD COLUMN longitude FLOAT")
 
 
 def get_session() -> Session:
+    """Open a SQLAlchemy session for callers to close when finished."""
     return SessionLocal()
 
 
 def cache_weather(session: Session, destination_id: str, data: dict[str, Any]) -> None:
+    """Insert or update cached weather JSON for one destination."""
     row = session.get(WeatherCache, destination_id)
     payload = json.dumps(data)
     if row:
@@ -238,6 +255,7 @@ def cache_weather(session: Session, destination_id: str, data: dict[str, Any]) -
 
 
 def get_cached_weather(session: Session, destination_id: str) -> dict[str, Any] | None:
+    """Return cached weather JSON for one destination, if present."""
     row = session.get(WeatherCache, destination_id)
     if row:
         return json.loads(row.payload)
@@ -245,6 +263,7 @@ def get_cached_weather(session: Session, destination_id: str) -> dict[str, Any] 
 
 
 def cache_places(session: Session, cache_key: str, data: dict[str, Any]) -> None:
+    """Insert or update cached Google Places JSON for a destination/radius key."""
     row = session.get(PlacesCache, cache_key)
     payload = json.dumps(data)
     if row:
@@ -256,6 +275,7 @@ def cache_places(session: Session, cache_key: str, data: dict[str, Any]) -> None
 
 
 def get_cached_places(session: Session, cache_key: str) -> dict[str, Any] | None:
+    """Return cached Google Places JSON for a destination/radius key."""
     row = session.get(PlacesCache, cache_key)
     if row:
         return json.loads(row.payload)
@@ -272,6 +292,7 @@ def cache_costs(
     source: str,
     source_details: dict[str, str] | None = None,
 ) -> None:
+    """Insert or update cached cost estimates and their source details."""
     row = session.get(CostCache, destination_id)
     source_details_json = json.dumps(source_details or {})
     if row:
@@ -298,10 +319,12 @@ def cache_costs(
 
 
 def get_cached_costs(session: Session, destination_id: str) -> CostCache | None:
+    """Return the raw cached cost row so callers can inspect age/source metadata."""
     return session.get(CostCache, destination_id)
 
 
 def cache_destinations(session: Session, data: dict[str, Any]) -> None:
+    """Store the latest dynamically discovered destination list."""
     row = session.get(DestinationsCache, "latest")
     payload = json.dumps(data)
     if row:
@@ -313,6 +336,7 @@ def cache_destinations(session: Session, data: dict[str, Any]) -> None:
 
 
 def get_cached_destinations(session: Session) -> dict[str, Any] | None:
+    """Return the cached discovered destination list, if present."""
     row = session.get(DestinationsCache, "latest")
     if row:
         return json.loads(row.payload)
@@ -329,6 +353,7 @@ def purge_mock_api_cache() -> None:
     session = get_session()
     try:
         if OPENWEATHER_API_KEY:
+            # Once a real key exists, demo weather should not shadow live requests.
             for row in session.query(WeatherCache).all():
                 try:
                     payload = json.loads(row.payload)
@@ -339,6 +364,7 @@ def purge_mock_api_cache() -> None:
                     session.delete(row)
 
         if GOOGLE_MAPS_API_KEY:
+            # Clear old demo venues so Google Places can repopulate the cache.
             for row in session.query(PlacesCache).all():
                 try:
                     payload = json.loads(row.payload)
@@ -359,6 +385,7 @@ def log_recommendation(
     preferences: dict[str, Any],
     results: list[dict[str, Any]],
 ) -> None:
+    """Save a completed recommendation run for the History page."""
     session.add(
         RecommendationLog(
             origin_airport=origin,
@@ -370,6 +397,7 @@ def log_recommendation(
 
 
 def get_recommendation_history(session: Session, limit: int = 20) -> list[dict[str, Any]]:
+    """Return recent recommendation runs in a compact display format."""
     rows = (
         session.query(RecommendationLog)
         .order_by(RecommendationLog.created_at.desc())
@@ -390,6 +418,7 @@ def get_recommendation_history(session: Session, limit: int = 20) -> list[dict[s
 
 
 def get_cache_stats(session: Session) -> dict[str, int]:
+    """Count cache and history rows for diagnostics/admin views."""
     return {
         "weather_entries": session.query(WeatherCache).count(),
         "places_entries": session.query(PlacesCache).count(),

@@ -1,5 +1,12 @@
 # OpenWeather — current weather and 5-day forecast.
 # No API key? Returns fake data so the app still runs for demos.
+"""OpenWeather client with caching and demo fallback data.
+
+The ranking engine asks this service for current weather and a short forecast.
+Fresh cached API data is reused, and deterministic mock weather is returned
+when no key is configured or a request fails.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +22,8 @@ from database import is_mock_weather_payload
 
 @dataclass
 class WeatherSnapshot:
+    """Normalized weather data used by scoring, charts, and destination details."""
+
     latitude: float
     longitude: float
     country: str
@@ -29,9 +38,12 @@ class WeatherSnapshot:
 
 
 class WeatherService:
+    """Fetch, cache, and normalize weather for a destination."""
+
     BASE = "https://api.openweathermap.org/data/2.5"
 
     def __init__(self, api_key: str | None = None) -> None:
+        """Store the API key, if one is available."""
         self.api_key = api_key or OPENWEATHER_API_KEY
 
     def get_weather(
@@ -41,6 +53,7 @@ class WeatherService:
         lon: float,
         country_hint: str = "",
     ) -> WeatherSnapshot:
+        """Return weather for a destination, using fresh cache before live calls."""
         session = get_session()
         try:
             cached = get_cached_weather(session, destination_id)
@@ -49,6 +62,7 @@ class WeatherService:
                 if not (self.api_key and is_mock_weather_payload(data)):
                     return self._from_payload(data)
 
+            # Cache both live and fallback payloads so reruns stay fast.
             data = self._fetch(lat, lon)
             cache_weather(
                 session,
@@ -60,6 +74,7 @@ class WeatherService:
             session.close()
 
     def _fetch(self, lat: float, lon: float) -> dict[str, Any]:
+        """Call OpenWeather current/forecast endpoints, or return mock data."""
         if not self.api_key:
             return self._mock_weather(lat, lon)
 
@@ -118,6 +133,7 @@ class WeatherService:
 
     @staticmethod
     def _from_payload(data: dict[str, Any]) -> WeatherSnapshot:
+        """Convert raw OpenWeather or mock JSON into a WeatherSnapshot."""
         cur = data["current"]
         fc_list = data.get("forecast", {}).get("list", [])
         forecast_days = []
@@ -160,6 +176,7 @@ class WeatherService:
 
     @staticmethod
     def _is_fresh(fetched_at: str | None, ttl: int) -> bool:
+        """Check whether a cached weather payload is still valid."""
         if not fetched_at:
             return False
         ts = datetime.fromisoformat(fetched_at)

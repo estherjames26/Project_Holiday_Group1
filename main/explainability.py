@@ -210,6 +210,7 @@ def build_score_explanation(dest: dict[str, Any], prefs: Any) -> list[str]:
         "This is a preference-based recommendation, not an objective universal ranking.",
     ]
 
+
 def _format_source_label(source: str | None) -> str:
     """
     Clean up technical source labels so they are easier for users to read.

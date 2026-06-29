@@ -1,4 +1,10 @@
 # Turns lat/lon into a city name and country via Google Geocoding.
+"""Reverse geocoding helper for destination discovery and display.
+
+Coordinates are converted into readable city, region, and country data using
+the Google Maps SDK or REST API. A small mock result keeps demo mode working.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,6 +18,8 @@ from settings import GOOGLE_MAPS_API_KEY, usable_api_key
 
 @dataclass
 class GeoInfo:
+    """Normalized address details returned by reverse geocoding."""
+
     formatted_address: str
     country: str
     region: str
@@ -20,7 +28,10 @@ class GeoInfo:
 
 
 class GoogleGeocodingService:
+    """Resolve coordinates into city/country metadata with safe fallbacks."""
+
     def __init__(self, api_key: str | None = None) -> None:
+        """Create a Google Maps client if a usable API key is available."""
         self.api_key = usable_api_key(api_key or GOOGLE_MAPS_API_KEY)
         self._client = None
         if self.api_key:
@@ -30,6 +41,7 @@ class GoogleGeocodingService:
                 self.api_key = ""
 
     def reverse_geocode(self, lat: float, lon: float) -> GeoInfo:
+        """Return location metadata by SDK, REST, or demo fallback."""
         if self._client:
             try:
                 return self._via_sdk(lat, lon)
@@ -43,10 +55,12 @@ class GoogleGeocodingService:
         return self._mock(lat, lon)
 
     def _via_sdk(self, lat: float, lon: float) -> GeoInfo:
+        """Reverse geocode with the googlemaps SDK."""
         results = self._client.reverse_geocode((lat, lon))
         return self._parse(results)
 
     def _via_rest(self, lat: float, lon: float) -> GeoInfo:
+        """Reverse geocode with the Google Geocoding REST API."""
         resp = requests.get(
             "https://maps.googleapis.com/maps/api/geocode/json",
             params={"latlng": f"{lat},{lon}", "key": self.api_key},
@@ -57,6 +71,7 @@ class GoogleGeocodingService:
 
     @staticmethod
     def _parse(results: list[dict[str, Any]]) -> GeoInfo:
+        """Extract country, region, locality, and place id from Google results."""
         if not results:
             return GeoInfo("Unknown", "Unknown", "Unknown", "Unknown", "")
 
@@ -83,6 +98,7 @@ class GoogleGeocodingService:
 
     @staticmethod
     def _mock(lat: float, lon: float) -> GeoInfo:
+        """Return a deterministic demo geocode result when Google is unavailable."""
         return GeoInfo(
             formatted_address=f"Demo location ({lat:.2f}, {lon:.2f})",
             country="Demo",

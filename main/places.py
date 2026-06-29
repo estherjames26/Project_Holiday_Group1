@@ -1,5 +1,11 @@
 # Holiday destinations — the list we rank and compare.
 # Google finds most cities at runtime; BACKUP_PLACES is used if that fails.
+"""Destination data used by the ranking engine.
+
+Google discovery supplies most destinations at runtime. The backup list keeps
+the app usable when discovery is unavailable or no Google API key is configured.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +13,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Destination:
+    """A holiday destination with location, airport, and activity metadata."""
+
     id: str
     name: str
     country: str
@@ -144,6 +152,7 @@ def get_destinations(limit: int = 12) -> list[Destination]:
 
 
 def get_destination_by_id(dest_id: str) -> Destination | None:
+    """Find a destination by id from discovered results, then the backup list."""
     for dest in get_destinations(limit=50):
         if dest.id == dest_id:
             return dest

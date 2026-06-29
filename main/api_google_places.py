@@ -1,4 +1,11 @@
 # Google Places — bars, restaurants and nightclubs within 5 km.
+"""Google Places client for nearby bars, restaurants, and nightclubs.
+
+The service prefers cached venue data, then tries the Google Maps SDK, then
+the REST API. If no key is configured or a request fails, it returns small demo
+venue sets so the app can still run.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,6 +21,8 @@ from database import is_mock_places_payload
 
 @dataclass
 class PlaceResult:
+    """Normalized nearby venue data used by scoring, maps, and venue tables."""
+
     name: str
     place_type: str
     rating: float | None
@@ -25,6 +34,8 @@ class PlaceResult:
 
 @dataclass
 class AmenitySummary:
+    """Grouped venue results plus convenience counts for scoring."""
+
     bars: list[PlaceResult] = field(default_factory=list)
     restaurants: list[PlaceResult] = field(default_factory=list)
     night_clubs: list[PlaceResult] = field(default_factory=list)
@@ -47,6 +58,8 @@ class AmenitySummary:
 
 
 class GooglePlacesService:
+    """Fetch and cache nearby amenities for one destination."""
+
     PLACE_TYPES = {
         "bar": "bar",
         "restaurant": "restaurant",
@@ -54,6 +67,7 @@ class GooglePlacesService:
     }
 
     def __init__(self, api_key: str | None = None) -> None:
+        """Create a Google Maps SDK client when a usable API key is available."""
         self.api_key = usable_api_key(api_key or GOOGLE_MAPS_API_KEY)
         self._client = None
         if self.api_key:
@@ -69,6 +83,7 @@ class GooglePlacesService:
         lon: float,
         radius_m: int = 5000,
     ) -> AmenitySummary:
+        """Return nearby amenities, using fresh cache before API/fallback calls."""
         cache_key = f"{destination_id}_{radius_m}"
         session = get_session()
         try:
@@ -78,6 +93,7 @@ class GooglePlacesService:
                 if not (self.api_key and is_mock_places_payload(data)):
                     return self._from_dict(data)
 
+            # Cache demo data too so sidebar reruns do not repeatedly hit APIs.
             data = self._fetch(lat, lon, radius_m)
             cache_places(session, cache_key, {"fetched_at": cached_fetched_iso(), "data": data})
             return self._from_dict(data)
@@ -85,11 +101,13 @@ class GooglePlacesService:
             session.close()
 
     def _fetch(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
+        """Fetch venue groups by SDK when possible, otherwise REST/mock."""
         if self._client:
             return self._fetch_via_sdk(lat, lon, radius_m)
         return self._fetch_via_rest(lat, lon, radius_m)
 
     def _fetch_via_sdk(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
+        """Fetch nearby places with the googlemaps SDK, falling back to REST."""
         location = (lat, lon)
         result: dict[str, list[dict]] = {}
         try:
@@ -101,6 +119,7 @@ class GooglePlacesService:
             return self._fetch_via_rest(lat, lon, radius_m)
 
     def _fetch_via_rest(self, lat: float, lon: float, radius_m: int) -> dict[str, list[dict]]:
+        """Fetch nearby places with REST, or mock venues on errors/no key."""
         if not self.api_key:
             return self._mock_places(lat, lon)
 
@@ -167,6 +186,7 @@ class GooglePlacesService:
 
     @staticmethod
     def _parse_place(raw: dict, place_type: str) -> PlaceResult:
+        """Normalize one Google Places result dictionary."""
         loc = raw["geometry"]["location"]
         return PlaceResult(
             name=raw.get("name", "Unknown"),
@@ -179,6 +199,7 @@ class GooglePlacesService:
         )
 
     def _from_dict(self, data: dict[str, list[dict]]) -> AmenitySummary:
+        """Convert grouped raw venue dictionaries into an AmenitySummary."""
         return AmenitySummary(
             bars=[self._parse_place(p, "bar") for p in data.get("bar", [])],
             restaurants=[self._parse_place(p, "restaurant") for p in data.get("restaurant", [])],
@@ -187,6 +208,7 @@ class GooglePlacesService:
 
     @staticmethod
     def _is_fresh(cached: dict[str, Any]) -> bool:
+        """Check whether cached Places data is inside its TTL."""
         from datetime import datetime, timezone
 
         fetched_at = cached.get("fetched_at")
@@ -200,12 +222,14 @@ class GooglePlacesService:
 
 
 def cached_fetched_iso() -> str:
+    """Return a timezone-aware timestamp for Places cache writes."""
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
 
 
 def build_google_maps_embed_url(lat: float, lon: float, api_key: str, zoom: int = 12) -> str:
+    """Build a Google Maps iframe URL, or an empty string without an API key."""
     if not api_key:
         return ""
     return (

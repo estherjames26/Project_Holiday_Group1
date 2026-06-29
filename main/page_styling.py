@@ -1,4 +1,8 @@
-# CSS and HTML for the Streamlit pages (hero banner, cards, status pills).
+"""Streamlit styling and small HTML render helpers.
+
+The functions here centralize the app's CSS, hero banner, status pills,
+summary boxes, takeaway boxes, and destination cards.
+"""
 
 from __future__ import annotations
 
@@ -75,10 +79,12 @@ CUSTOM_CSS = """
 
 
 def inject_styles() -> None:
+    """Inject the custom CSS used by the Streamlit pages."""
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 def render_hero() -> None:
+    """Render the app header banner."""
     st.markdown(
         """
         <div class="hero">
@@ -91,6 +97,7 @@ def render_hero() -> None:
 
 
 def render_status_pills(openweather_ok: bool, google_ok: bool, openai_ok: bool, origin: str) -> None:
+    """Render small status labels for API modes and selected origin airport."""
     pills = [
         f"OpenWeather {'live' if openweather_ok else 'demo mode'}",
         f"Google Maps {'live' if google_ok else 'demo mode'}",
@@ -102,15 +109,18 @@ def render_status_pills(openweather_ok: bool, google_ok: bool, openai_ok: bool, 
 
 
 def render_summary_box(text: str) -> None:
+    """Render the recommendation summary in a styled box."""
     clean = text.replace("**", "").replace("_", "")
     st.markdown(f'<div class="summary-box">{clean}</div>', unsafe_allow_html=True)
 
 
 def render_takeaway(text: str) -> None:
+    """Render one portfolio insight line."""
     st.markdown(f'<div class="takeaway-box">• {text}</div>', unsafe_allow_html=True)
 
 
 def render_dest_card(rank: int, dest: dict) -> None:
+    """Render a compact destination card for the ranked results list."""
     st.markdown(
         f"""
         <div class="dest-card">

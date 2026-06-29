@@ -1,6 +1,12 @@
 # Scrapes trip costs from the web (Numbeo + Cheapflights).
 # Falls back to hardcoded estimates if a scrape fails.
 
+"""Scrape and cache rough trip cost estimates.
+
+The service combines Numbeo, Google Flights/Cheapflights hints, and fallback
+price tables to estimate flights, lodging, meals, and a 7-night total.
+"""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +26,8 @@ NUMBEO_429_CACHE_TTL = 6 * 60 * 60
 
 @dataclass
 class CostEstimate:
+    """Cost data returned to the ranking engine for one destination."""
+
     destination_id: str
     flight_estimate_usd: float
     hotel_nightly_usd: float
@@ -109,10 +117,13 @@ ORIGIN_FLIGHT_MULTIPLIERS: dict[str, float] = {
 
 
 class CostScraperService:
+    """Resolve destination costs using cache, web scraping, and fallbacks."""
+
     NUMBEO_BASE = "https://www.numbeo.com/cost-of-living/in"
     CHEAPFLIGHTS_BASE = "https://www.cheapflights.co.uk/flights-to"
 
     def __init__(self, origin_airport: str | None = None) -> None:
+        """Create an HTTP session with browser-like headers for scraping."""
         self.origin = (origin_airport or ORIGIN_AIRPORT).upper().strip()[:3]
         self.session = requests.Session()
         self.session.headers.update({
@@ -136,9 +147,16 @@ class CostScraperService:
         country: str = "",
         airport_code: str = "",
     ) -> CostEstimate:
+        """Return a cost estimate, preferring fresh cached data.
+
+        Inputs identify the destination and airport. The output includes flight,
+        hotel, Airbnb, meal, total cost, and source labels. If scraping fails,
+        destination-specific or generic fallback prices are used and cached.
+        """
         cache_id = self._cache_key(self.origin, destination_id)
         db = get_session()
         try:
+            # Cache reads include the origin airport because flight prices vary by origin.
             cached = get_cached_costs(db, cache_id)
             if cached and self._row_can_be_used(cached):
                 estimate = self._from_row(cached)
@@ -200,6 +218,7 @@ class CostScraperService:
             )
             source = "+".join(source_parts) if source_parts else "fallback"
 
+            # Persist the estimate and source details so repeat searches are faster.
             cache_costs(
                 db,
                 cache_id,
@@ -226,10 +245,12 @@ class CostScraperService:
             db.close()
 
     def _resolve_numbeo_slug(self, destination_id: str, city_name: str, country: str) -> str | None:
+        """Pick the best Numbeo page slug for a destination, if one is known."""
         candidates = self._numbeo_slug_candidates(destination_id, city_name, country)
         return candidates[0] if candidates else None
 
     def _numbeo_slug_candidates(self, destination_id: str, city_name: str, country: str) -> list[str]:
+        """Build possible Numbeo page names from curated aliases and city text."""
         candidates: list[str] = []
 
         if destination_id in NUMBEO_SLUGS:
@@ -260,6 +281,7 @@ class CostScraperService:
         return cleaned
 
     def _scrape_numbeo_for_destination(self, destination_id: str, city_name: str, country: str) -> dict[str, Any]:
+        """Try likely Numbeo pages and return the first useful cost payload."""
         candidates = self._numbeo_slug_candidates(destination_id, city_name, country)
         if not candidates:
             return {"source": "numbeo-no-page"}
@@ -280,6 +302,7 @@ class CostScraperService:
         return last_result
 
     def _scrape_numbeo(self, slug: str) -> dict[str, Any]:
+        """Scrape meal and rent hints from one Numbeo cost-of-living page."""
         url = f"{self.NUMBEO_BASE}/{quote(slug)}"
         try:
             resp = self.session.get(url, params={"displayCurrency": "USD"}, timeout=20)
@@ -321,6 +344,7 @@ class CostScraperService:
 
     @staticmethod
     def _parse_usd(text: str) -> float | None:
+        """Extract a USD number from scraped text."""
         cleaned = text.replace(",", "").strip()
         match = re.search(r"\$\s*([\d.]+)", cleaned)
         if match:
@@ -332,6 +356,7 @@ class CostScraperService:
 
     @staticmethod
     def _resolve_cheapflights_slug(city_name: str, country: str) -> str:
+        """Convert a city name into the URL slug expected by Cheapflights."""
         primary = city_name.split(",")[0].strip()
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", primary.lower()).strip("-")
         slug_map = {
@@ -412,6 +437,7 @@ class CostScraperService:
         return None, "cheapflights-scrape-failed"
 
     def _scrape_flight_hint(self, dest_airport: str) -> float | None:
+        """Try to pull a visible fare hint from a Google Flights results page."""
         if not dest_airport or len(dest_airport) != 3:
             return None
         url = (
@@ -438,12 +464,14 @@ class CostScraperService:
 
     @staticmethod
     def _row_is_fresh(row: Any) -> bool:
+        """Return true when a cached cost row is inside the normal TTL."""
         from datetime import datetime, timezone
 
         return CostScraperService._row_age_seconds(row) < COST_CACHE_TTL
 
     @staticmethod
     def _row_age_seconds(row: Any) -> float:
+        """Calculate how old a cached cost row is in seconds."""
         from datetime import datetime, timezone
 
         if not row.fetched_at:
@@ -455,6 +483,7 @@ class CostScraperService:
 
     @staticmethod
     def _row_can_be_used(row: Any) -> bool:
+        """Decide whether a cached row is usable for another recommendation run."""
         if not CostScraperService._row_is_fresh(row):
             return False
         if CostScraperService._row_has_numbeo_429(row):
@@ -463,6 +492,7 @@ class CostScraperService:
 
     @staticmethod
     def _row_has_numbeo_429(row: Any) -> bool:
+        """Detect cached rows created while Numbeo was rate limiting requests."""
         raw_details = getattr(row, "source_details", None)
         if raw_details:
             try:
@@ -475,6 +505,7 @@ class CostScraperService:
 
     @staticmethod
     def _row_has_numbeo_attempt(row: Any) -> bool:
+        """Return true if the cached row records a successful Numbeo attempt."""
         raw_details = getattr(row, "source_details", None)
         if raw_details:
             try:
@@ -489,6 +520,7 @@ class CostScraperService:
 
     @staticmethod
     def _from_row(row: Any) -> CostEstimate:
+        """Convert a database cache row back into a CostEstimate."""
         total = row.flight_estimate_usd + (row.hotel_nightly_usd * 7) + (row.meal_index * 7 * 3)
         cache_id = row.destination_id or ""
         origin = cache_id.split(":", 1)[0] if ":" in cache_id else ORIGIN_AIRPORT
@@ -507,6 +539,7 @@ class CostScraperService:
 
     @staticmethod
     def _source_details_from_row(row: Any, origin: str) -> dict[str, str]:
+        """Read structured source details, with a best-effort fallback for old rows."""
         raw_details = getattr(row, "source_details", None)
         if raw_details:
             try:

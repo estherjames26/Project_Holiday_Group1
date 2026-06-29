@@ -1,5 +1,12 @@
 # Main ranking logic — filters places by your prefs and scores what's left.
 # If rankings look wrong, start debugging here.
+"""Recommendation scoring for Holiday Planner destinations.
+
+The engine gathers weather, venues, costs, and geocoding data, filters out
+destinations that miss the user's limits, then creates a weighted score for
+the remaining places.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,6 +32,8 @@ def normalize_weights(w_w: float, w_c: float, w_n: float, w_a: float) -> tuple[f
 
 @dataclass
 class UserPreferences:
+    """User-selected filters and score weights from the Streamlit sidebar."""
+
     min_temp_c: float = 26.0
     max_temp_c: float = 34.0
     max_wind_ms: float = 12.0
@@ -39,6 +48,8 @@ class UserPreferences:
 
 @dataclass
 class ScoredDestination:
+    """Internal bundle for a destination after data gathering and scoring."""
+
     destination: Destination
     score: float
     weather: dict[str, Any]
@@ -48,7 +59,10 @@ class ScoredDestination:
 
 
 class RecommendationEngine:
+    """Coordinates data services and turns destinations into ranked results."""
+
     def __init__(self) -> None:
+        """Create service clients used during recommendation runs."""
         self.weather = WeatherService()
         self.places = GooglePlacesService()
         self.geocoding = GoogleGeocodingService()
@@ -62,12 +76,19 @@ class RecommendationEngine:
         top_n: int = 5,
         persist: bool = True,
     ) -> tuple[list[dict[str, Any]], str, list[str]]:
+        """Return ranked destinations, a summary, and portfolio-level insights.
+
+        Inputs are the user's preferences, the departure airport for flight
+        estimates, and the number of results to keep. Results are logged to the
+        database when `persist` is true and at least one destination matches.
+        """
         self.costs.origin = origin_airport.upper().strip()[:3]
         prefs = self._normalise_prefs(prefs)
         scored: list[ScoredDestination] = []
         candidates = get_destinations()
 
         for dest in candidates:
+            # Weather, nightlife, and budget filters can reject a destination early.
             result = self._score_destination(dest, prefs)
             if result:
                 scored.append(result)
@@ -91,6 +112,7 @@ class RecommendationEngine:
         )
 
         if persist and output:
+            # Keep a lightweight search history for the History page.
             session = get_session()
             try:
                 log_recommendation(
@@ -131,6 +153,7 @@ class RecommendationEngine:
         dest: Destination,
         prefs: UserPreferences,
     ) -> ScoredDestination | None:
+        """Fetch live/cached data and score one destination, or reject it."""
         wx = self.weather.get_weather(dest.id, dest.latitude, dest.longitude, dest.country)
         if wx.temp_max_c < prefs.min_temp_c or wx.temp_max_c > prefs.max_temp_c:
             return None
@@ -150,6 +173,7 @@ class RecommendationEngine:
         nightlife_score = self._nightlife_score(amenities, dest.nightlife_score)
         adventure_score = self._adventure_score(dest, prefs.preferred_tags)
 
+        # Weighted category scores are 0..1, then scaled to a 0..100 score.
         total = (
             weather_score * prefs.weather_weight
             + cost_score * prefs.cost_weight
@@ -198,6 +222,7 @@ class RecommendationEngine:
 
     @staticmethod
     def _weather_score(wx: Any, prefs: UserPreferences) -> float:
+        """Score weather fit using temperature, wind, cloud, and humidity."""
         ideal = (prefs.min_temp_c + prefs.max_temp_c) / 2
         temp_diff = abs(wx.temp_max_c - ideal) / max(ideal, 1)
         temp_part = max(0, 1 - temp_diff)
@@ -208,18 +233,21 @@ class RecommendationEngine:
 
     @staticmethod
     def _cost_score(total: float, max_budget: float) -> float:
+        """Score cheaper trips higher within the user's maximum budget."""
         if total >= max_budget:
             return 0.0
         return 1 - (total / max_budget)
 
     @staticmethod
     def _nightlife_score(amenities: Any, baseline: int) -> float:
+        """Blend live nearby venue counts with the destination's baseline vibe score."""
         venue_part = min(amenities.total_nightlife / 10, 1.0)
         baseline_part = baseline / 10
         return venue_part * 0.6 + baseline_part * 0.4
 
     @staticmethod
     def _adventure_score(dest: Destination, preferred: list[str]) -> float:
+        """Score how closely a destination's tags match the user's interests."""
         if not preferred:
             return len(dest.adventure_tags) / 6
         matches = sum(1 for t in dest.adventure_tags if any(p in t for p in preferred))
@@ -227,6 +255,7 @@ class RecommendationEngine:
 
     @staticmethod
     def _place_dict(place: Any) -> dict[str, Any]:
+        """Convert a place result into the dictionary used by maps and UI."""
         return {
             "name": place.name,
             "latitude": place.latitude,
@@ -238,6 +267,7 @@ class RecommendationEngine:
         }
 
     def _to_dict(self, scored: ScoredDestination) -> dict[str, Any]:
+        """Flatten a scored destination into the app's display/export shape."""
         d = scored.destination
         geo = self.geocoding.reverse_geocode(d.latitude, d.longitude)
         return {
@@ -269,6 +299,7 @@ class RecommendationEngine:
         }
 
     def get_all_for_map(self, prefs: UserPreferences, origin: str = "LHR") -> list[dict[str, Any]]:
+        """Return every filtered-in destination so the overview map can show them."""
         self.costs.origin = origin.upper().strip()[:3]
         prefs = self._normalise_prefs(prefs)
         results = []

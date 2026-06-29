@@ -1,4 +1,10 @@
 # Short pros/cons text on each destination card.
+"""Human-readable pros, cons, and shortlist takeaways.
+
+These helpers explain ranked results in simple language using the scores and
+costs already calculated by the recommendation engine.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -7,6 +13,7 @@ from places import get_destinations
 
 
 def generate_destination_insights(dest: dict[str, Any], all_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build pros, cons, verdict, rank, and value score for one destination."""
     pros: list[str] = []
     cons: list[str] = []
     bd = dest["breakdown"]
@@ -18,6 +25,7 @@ def generate_destination_insights(dest: dict[str, Any], all_results: list[dict[s
             f"Weather is a bit off — {dest['wind_speed_ms']:.1f} m/s wind, {dest['cloudiness']}% cloud cover"
         )
 
+    # Cost and nightlife comments compare only against the current result set.
     cheapest = min(all_results, key=lambda x: x["total_cost_usd"])
     if dest["id"] == cheapest["id"]:
         pros.append(f"Cheapest option in your list (${dest['total_cost_usd']:,.0f} for 7 nights)")
@@ -63,7 +71,7 @@ def generate_portfolio_insights(
     prefs: dict[str, Any],
     candidate_count: int | None = None,
 ) -> list[str]:
-    """Bullet points for the results summary — plain text, no markdown."""
+    """Build plain-text bullets summarizing the whole recommendation shortlist."""
     if not results:
         return ["Nothing matched — try a bigger budget or wider temp range."]
 

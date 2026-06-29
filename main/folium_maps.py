@@ -1,4 +1,8 @@
-# Folium maps shown in the app (pins, heatmaps).
+"""Folium map builders used by the Streamlit app.
+
+These helpers create overview destination maps, amenity heatmaps, and venue
+marker maps from the dictionaries produced by the recommendation engine.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ def build_destination_map(
     destinations: list[dict[str, Any]],
     selected_id: str | None = None,
 ) -> folium.Map:
+    """Build an overview map with one marker per ranked destination."""
     if not destinations:
         return folium.Map(location=[0, 0], zoom_start=2)
 
@@ -20,6 +25,7 @@ def build_destination_map(
     fmap = folium.Map(location=[avg_lat, avg_lon], zoom_start=3, tiles="CartoDB positron")
 
     for dest in destinations:
+        # Highlight the selected destination without changing the map data.
         is_selected = dest["id"] == selected_id
         color = "red" if is_selected else "blue"
         radius = 12 if is_selected else 8
@@ -44,6 +50,7 @@ def build_destination_map(
 
 
 def build_amenity_heatmap(places: list[dict[str, Any]], lat: float, lon: float) -> folium.Map:
+    """Build a heatmap around one destination from venue/listing coordinates."""
     fmap = folium.Map(location=[lat, lon], zoom_start=13, tiles="CartoDB dark_matter")
     if places:
         heat_data = [[p["latitude"], p["longitude"], p.get("weight", 1.0)] for p in places]
@@ -62,6 +69,7 @@ def build_amenity_markers_map(
     lat: float,
     lon: float,
 ) -> folium.Map:
+    """Build a marker map for grouped amenities around a destination."""
     fmap = folium.Map(location=[lat, lon], zoom_start=13, tiles="OpenStreetMap")
     colors = {"bar": "blue", "restaurant": "green", "night_club": "purple"}
 

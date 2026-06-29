@@ -1,6 +1,13 @@
 # Finds tropical cities via Google Places text search.
 # Filters out UK/Europe and groups results by city (not individual bars).
 
+"""Discover tropical destination candidates with Google Places.
+
+The service searches broad tropical regions, groups nearby place hits into
+city-level destinations, caches the result, and falls back to seed destinations
+when Google is unavailable.
+"""
+
 from __future__ import annotations
 
 import re
@@ -55,10 +62,12 @@ ADVENTURE_BY_TYPES: dict[str, tuple[str, ...]] = {
 
 
 def _slug(name: str) -> str:
+    """Create a stable lowercase id from a destination name."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "destination"
 
 
 def _is_tropical_location(lat: float, country: str, region: str = "") -> bool:
+    """Filter out clearly non-tropical or intentionally excluded locations."""
     if country in EXCLUDED_COUNTRIES:
         return False
     if region in NON_TROPICAL_US_REGIONS:
@@ -69,6 +78,7 @@ def _is_tropical_location(lat: float, country: str, region: str = "") -> bool:
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Estimate distance between two coordinates in kilometres."""
     from math import asin, cos, radians, sin, sqrt
 
     r = 6371.0
@@ -109,7 +119,10 @@ def _dedupe_nearby(destinations: list[Destination], max_km: float = 40.0) -> lis
 
 
 class DestinationDiscoveryService:
+    """Find and cache candidate destinations for the ranking engine."""
+
     def __init__(self, api_key: str | None = None) -> None:
+        """Create Google Places and Geocoding clients when a usable key exists."""
         self.api_key = usable_api_key(api_key or GOOGLE_MAPS_API_KEY)
         self._client: googlemaps.Client | None = None
         self._geocoder = GoogleGeocodingService(self.api_key or None)
@@ -121,6 +134,7 @@ class DestinationDiscoveryService:
                 self._client = None
 
     def discover(self, limit: int = 12) -> list[Destination]:
+        """Return discovered destinations, using cache and seed fallbacks as needed."""
         session = get_session()
         try:
             cached = get_cached_destinations(session)
@@ -130,6 +144,7 @@ class DestinationDiscoveryService:
                     return destinations[:limit]
 
             if not self.api_key:
+                # Demo mode keeps the app usable without Google credentials.
                 return list(SEED_DESTINATIONS)[:limit]
 
             raw_places = self._search_tropical_destinations()
@@ -138,6 +153,7 @@ class DestinationDiscoveryService:
             if not destinations:
                 destinations = list(SEED_DESTINATIONS)
 
+            # Cache the city-level pool rather than raw Google place responses.
             cache_destinations(session, {
                 "fetched_at": cached_fetched_iso(),
                 "destinations": self._serialize(destinations),
@@ -147,6 +163,7 @@ class DestinationDiscoveryService:
             session.close()
 
     def _search_tropical_destinations(self) -> list[dict[str, Any]]:
+        """Run text searches across predefined tropical regions and dedupe place ids."""
         seen_ids: set[str] = set()
         results: list[dict[str, Any]] = []
 
@@ -162,6 +179,7 @@ class DestinationDiscoveryService:
         return results
 
     def _text_search(self, query: str, lat: float, lon: float, radius: int) -> list[dict[str, Any]]:
+        """Search Google Places by SDK first, then REST as a fallback."""
         if self._client:
             try:
                 resp = self._client.places(query=query, location=(lat, lon), radius=radius)
@@ -280,6 +298,7 @@ class DestinationDiscoveryService:
 
     @staticmethod
     def _infer_adventure_tags(types: list[str]) -> tuple[str, ...]:
+        """Turn Google place types into a small set of activity tags."""
         tags: list[str] = []
         for t in types:
             tags.extend(ADVENTURE_BY_TYPES.get(t, ()))
@@ -296,6 +315,7 @@ class DestinationDiscoveryService:
 
     @staticmethod
     def _build_description(name: str, country: str, types: list[str]) -> str:
+        """Build a short plain-English description for a discovered destination."""
         kind = "coastal destination"
         if "natural_feature" in types:
             kind = "natural getaway"
@@ -304,6 +324,7 @@ class DestinationDiscoveryService:
         return f"{name} — {kind} in {country}, with beaches, restaurants, and nightlife nearby."
 
     def _guess_airport_code(self, city_name: str, lat: float, lon: float) -> str:
+        """Guess a nearby airport code, using Google text search when available."""
         if not self.api_key:
             return city_name[:3].upper()
 
@@ -318,6 +339,7 @@ class DestinationDiscoveryService:
 
     @staticmethod
     def _serialize(destinations: list[Destination]) -> list[dict[str, Any]]:
+        """Convert destination objects into JSON-friendly cache rows."""
         return [
             {
                 "id": d.id,
@@ -335,6 +357,7 @@ class DestinationDiscoveryService:
 
     @staticmethod
     def _deserialize(rows: list[dict[str, Any]]) -> list[Destination]:
+        """Convert cached destination dictionaries back into Destination objects."""
         return [
             Destination(
                 id=row["id"],
@@ -352,6 +375,7 @@ class DestinationDiscoveryService:
 
     @staticmethod
     def _is_fresh(fetched_at: str | None) -> bool:
+        """Check whether the cached destination pool is still inside its TTL."""
         from datetime import datetime, timezone
 
         if not fetched_at:
@@ -364,6 +388,7 @@ class DestinationDiscoveryService:
 
 
 def cached_fetched_iso() -> str:
+    """Return a timezone-aware timestamp for destination cache writes."""
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
