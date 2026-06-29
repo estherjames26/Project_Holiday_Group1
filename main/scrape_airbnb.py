@@ -178,23 +178,31 @@ def scrape_airbnb_listings(
         cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
         print(f"[airbnb] Final card count: {len(cards)} (will parse up to {limit})")
 
-    # ── PASS 1: Read cards incrementally while scrolling down ────────────────────
-        # Defeats Airbnb's DOM virtualization by processing cards while active in viewport.
+    # ── PASS 1: scroll card-by-card, extract immediately while in viewport ──
         raw_cards: list[dict] = []
-        seen_urls = set()
+        seen_urls: set[str] = set()
+
+        # Get initial cards
+        cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
+        
+        card_index = 0
         scroll_attempts = 0
-        max_scroll_attempts = 15
+        max_scroll_attempts = 12
 
         while len(raw_cards) < limit and scroll_attempts < max_scroll_attempts:
-            # Re-find whatever cards are currently active in the DOM tree
             cards = driver.find_elements(By.CSS_SELECTOR, 'div[data-testid="card-container"]')
             
-            for card in cards:
+            # Process any new cards we haven't seen yet
+            for card in cards[card_index:]:
                 if len(raw_cards) >= limit:
                     break
-                
+
                 try:
-                    # 1. Grab URL first to use as a unique key descriptor
+                    # Scroll this specific card into centre of viewport FIRST
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+                    time.sleep(0.6)  # Let it fully render
+
+                    # Get URL as dedup key
                     listing_url = None
                     try:
                         link_elem = card.find_element(By.CSS_SELECTOR, 'a[href*="/rooms/"]')
@@ -203,24 +211,21 @@ def scrape_airbnb_listings(
                     except Exception:
                         pass
 
-                    # Skip if we already parsed this specific property listing
                     if listing_url and listing_url in seen_urls:
                         continue
 
-                    # 2. Briefly focus the element to force rendering its sub-elements
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
-                    time.sleep(0.4)
-
                     card_text = card.text
                     if not card_text or len(card_text.strip()) < 10:
-                        time.sleep(0.4) # Give a second chance layout paint
+                        time.sleep(0.5)
                         card_text = card.text
+                    if not card_text or len(card_text.strip()) < 10:
+                        continue
 
                     lines = [l.strip() for l in card_text.splitlines() if l.strip()]
                     if not lines:
                         continue
 
-                    # Title Extraction
+                    # Title
                     title = "Unknown Listing"
                     try:
                         title_elem = card.find_element(By.CSS_SELECTOR, '[id^="title_"]')
@@ -236,7 +241,7 @@ def scrape_airbnb_listings(
                                 title = line
                                 break
 
-                    # Description Extraction
+                    # Description
                     description = None
                     for i, line in enumerate(lines):
                         if line == title and i + 1 < len(lines):
@@ -250,7 +255,7 @@ def scrape_airbnb_listings(
                                 description = candidate
                             break
 
-                    # Bedrooms Extraction
+                    # Bedrooms
                     bed_parts = []
                     for line in lines:
                         if re.search(r"\d+\s*(bedroom|bed|bathroom|studio)", line, re.I):
@@ -259,7 +264,7 @@ def scrape_airbnb_listings(
                             break
                     bedrooms = " · ".join(bed_parts) if bed_parts else None
 
-                    # Price Parsing
+                    # Price
                     price_val = None
                     all_prices = re.findall(r"([£$€])([\d,]+)", card_text)
                     if all_prices:
@@ -270,11 +275,10 @@ def scrape_airbnb_listings(
                         if m:
                             price_val = float(m.group(1))
 
-                    # Drop container if it completely failed to extract basic info
                     if title == "Unknown Listing" and not price_val:
                         continue
 
-                    # Rating Extraction
+                    # Rating
                     rating = None
                     m = re.search(r"(\d\.\d+)\s*out of 5", card_text)
                     if m:
@@ -284,7 +288,7 @@ def scrape_airbnb_listings(
                         if m2:
                             rating = float(m2.group(1))
 
-                    # Image Extraction
+                    # Image
                     image_url = None
                     try:
                         img_elem = card.find_element(By.CSS_SELECTOR, "img")
@@ -292,12 +296,11 @@ def scrape_airbnb_listings(
                     except Exception:
                         pass
 
-                    # Commit to output stack
                     if not listing_url:
-                        listing_url = f"https://www.airbnb.com/rooms/unknown_{random.randint(10000, 99999)}"
+                        listing_url = f"https://www.airbnb.com/rooms/unknown_{random.randint(10000,99999)}"
 
                     seen_urls.add(listing_url)
-                    print(f"[airbnb] Successfully parsed item {len(raw_cards) + 1}: {title} -> {price_val}")
+                    print(f"[airbnb] Parsed {len(raw_cards)+1}: {title} → {price_val}")
 
                     raw_cards.append({
                         "name": title,
@@ -312,38 +315,26 @@ def scrape_airbnb_listings(
                     if price_val:
                         prices.append(price_val)
 
+                    card_index += 1
+
                 except Exception as e:
-                    print(f"[airbnb] Temporary card skip item layout error: {e}")
+                    print(f"[airbnb] Card skip: {e}")
+                    card_index += 1
                     continue
 
-            # Nudge the page window down a viewport height to load the next block
-            driver.execute_script("window.scrollBy(0, 650);")
-            time.sleep(2)
             scroll_attempts += 1
-            print(f"[airbnb] Scrolling down step {scroll_attempts}. Total scraped uniquely: {len(raw_cards)}")
+            driver.execute_script("window.scrollBy(0, 800);")
+            time.sleep(1.5)
+            print(f"[airbnb] Scroll {scroll_attempts}, collected {len(raw_cards)}/{limit}")
 
-        print(f"\n[airbnb] Pass 1 done: {len(raw_cards)} cards collected, {len(prices)} with prices.")
+        print(f"\n[airbnb] Pass 1 done: {len(raw_cards)} cards, {len(prices)} with prices.")
 
-# ── PASS 2: fetch coordinates per listing ──────────────────────────────
+        # ── PASS 2: coordinates via geocoding only (no page navigation) ──────────
         for item in raw_cards:
-            lat, lng = None, None
-
-            # Try 1: __NEXT_DATA__ on the listing page
-            if item.get("listing_url"):
-                result = _get_listing_coords(
-                    driver, item["listing_url"], dest_lat, dest_lng
-                )
-                if result:
-                    lat, lng = result
-
-            # Try 2: Google Geocoding from listing name + city
-            if lat is None:
-                result = _geocode_name(item["name"], city_name, country)
-                if result:
-                    lat, lng = result
-
-            # Try 3: jitter around destination centre (last resort)
-            if lat is None:
+            result = _geocode_name(item["name"], city_name, country)
+            if result:
+                lat, lng = result
+            else:
                 lat = dest_lat + random.uniform(-0.02, 0.02)
                 lng = dest_lng + random.uniform(-0.02, 0.02)
                 print(f"[coords] Jitter fallback for '{item['name']}'")
